@@ -36,8 +36,6 @@ from app.services.ingestion.document_validator import (
     sanitize_filename,
     validate_upload,
 )
-from app.services.ingestion.pipeline import compute_document_hash
-from app.services.rag_runtime import create_rag_session, select_existing_collection
 from app.services.vectordb.collection_service import document_hash_exists, ingestion_collection_exists
 
 router = APIRouter(tags=["ingestion"])
@@ -76,6 +74,9 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    from app.services.ingestion.pipeline import compute_document_hash
+    from app.services.rag_runtime import create_rag_session, select_existing_collection
+
     settings = get_settings()
     content = await file.read()
 

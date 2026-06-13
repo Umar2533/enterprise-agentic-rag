@@ -7,7 +7,6 @@ from app.core.runtime_credentials import RuntimeCredentials
 from app.db.database import get_db
 from app.models.user import User
 from app.services.collections.user_collection_service import user_owns_session
-from app.services.rag_runtime import retrieve_session_sources
 from app.services.vectordb.collection_service import vector_provider_info
 from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
 
@@ -35,6 +34,8 @@ def vector_search(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    from app.services.rag_runtime import retrieve_session_sources
+
     if not request.session_id or (
         not (current_user.is_superuser or current_user.role == "admin")
         and not user_owns_session(db, current_user.id, request.session_id)

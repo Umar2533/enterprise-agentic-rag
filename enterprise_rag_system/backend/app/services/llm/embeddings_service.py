@@ -1,8 +1,5 @@
 from functools import lru_cache
 
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_openai import OpenAIEmbeddings
-
 from app.core.constants import (
     DEFAULT_EMBEDDING_PROVIDER,
     EMBEDDING_MODEL,
@@ -33,6 +30,8 @@ def normalize_embedding_provider(provider: str | None) -> str:
 
 @lru_cache(maxsize=4)
 def _huggingface_embeddings():
+    from langchain_huggingface import HuggingFaceEmbeddings
+
     return HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
         model_kwargs={"device": "cpu"},
@@ -48,6 +47,8 @@ def get_embeddings(
     if provider == DEFAULT_EMBEDDING_PROVIDER:
         return _huggingface_embeddings()
     if provider == "openai":
+        from langchain_openai import OpenAIEmbeddings
+
         credentials = credentials or RuntimeCredentials()
         return OpenAIEmbeddings(
             api_key=credentials.require_openai_api_key(),

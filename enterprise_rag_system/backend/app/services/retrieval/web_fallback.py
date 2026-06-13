@@ -1,5 +1,3 @@
-from langchain_community.tools.tavily_search import TavilySearchResults
-
 from app.core.runtime_credentials import RuntimeCredentials
 
 
@@ -8,6 +6,8 @@ def run_web_search_sources(
     max_results: int = 3,
     credentials: RuntimeCredentials | None = None,
 ) -> list[dict]:
+    from langchain_community.tools.tavily_search import TavilySearchResults
+
     credentials = credentials or RuntimeCredentials()
     tool = TavilySearchResults(
         api_key=credentials.require_tavily_api_key(),

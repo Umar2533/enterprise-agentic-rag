@@ -2,7 +2,6 @@ import re
 from typing import List
 
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
@@ -55,6 +54,8 @@ def split_documents_preserving_markdown_tables(
     If a table is bigger than chunk_size, it still remains intact because partial
     table chunks usually destroy row/header meaning in RAG retrieval.
     """
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -74,4 +75,3 @@ def split_documents_preserving_markdown_tables(
                         chunks.append(Document(page_content=chunk, metadata=metadata))
 
     return chunks
-

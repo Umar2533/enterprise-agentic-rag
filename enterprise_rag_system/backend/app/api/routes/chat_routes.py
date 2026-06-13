@@ -11,7 +11,6 @@ from app.db.database import get_db
 from app.models.user import User
 from app.schemas.chat_schema import ChatRequest, ChatResponse, TraceStep
 from app.services.collections.user_collection_service import get_user_collection_by_name, user_owns_session
-from app.services.rag_runtime import ask_session, get_runtime_session, stream_session_answer
 from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -56,6 +55,8 @@ def _require_collection_access(db: Session, user: User, collection_name: str | N
 
 
 def _log_collection_context(request: ChatRequest) -> None:
+    from app.services.rag_runtime import get_runtime_session
+
     runtime_session = get_runtime_session(request.session_id)
     runtime_collection = runtime_session.collection_name if runtime_session else ""
     requested_collection = (request.collection_name or "").strip()
@@ -92,6 +93,8 @@ def _runtime_credentials(
 
 
 def _stream_with_credentials(request: ChatRequest, credentials: RuntimeCredentials):
+    from app.services.rag_runtime import stream_session_answer
+
     try:
         with qdrant_runtime_credentials(
             credentials.effective_qdrant_url,
@@ -130,6 +133,8 @@ def chat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    from app.services.rag_runtime import ask_session
+
     logger.info(
         "Chat request payload session_id=%s collection=%s question_length=%s answer_length=%s allow_web_search=%s",
         request.session_id,

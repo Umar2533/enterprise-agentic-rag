@@ -27,14 +27,6 @@ from app.services.collections.user_collection_service import (
     user_owns_session,
 )
 from app.services.llm.embeddings_service import UnsupportedEmbeddingProviderError, normalize_embedding_provider
-from app.services.rag_runtime import (
-    delete_session,
-    delete_sessions_for_collection,
-    get_runtime_session,
-    list_sessions,
-    rebuild_bm25_index,
-    select_existing_collection,
-)
 from app.services.memory.memory_store import get_collection_memory, memory_stats
 from app.services.vectordb.collection_service import delete_qdrant_collection, sync_qdrant_registry
 from app.services.vectordb.qdrant_service import (
@@ -46,6 +38,12 @@ from app.services.vectordb.qdrant_service import (
 
 router = APIRouter(prefix="/collections", tags=["collections"])
 logger = logging.getLogger(__name__)
+
+
+def _rag_runtime():
+    from app.services import rag_runtime
+
+    return rag_runtime
 
 
 class SelectCollectionRequest(BaseModel):
@@ -119,7 +117,7 @@ def list_collections(
         credentials.effective_qdrant_api_key,
     ):
         registered_collections = sync_qdrant_registry()
-        sessions = list_sessions()
+        sessions = _rag_runtime().list_sessions()
         runtime_by_name = {session["collection_name"]: session for session in sessions}
         registry_by_name = {
             item["collection_name"]: item
@@ -180,7 +178,7 @@ def select_collection(
             credentials.effective_qdrant_api_key,
         ):
             qdrant_started = time.monotonic()
-            session = select_existing_collection(
+            session = _rag_runtime().select_existing_collection(
                 session_id=uuid.uuid4().hex,
                 collection_name=requested_collection,
                 embedding_provider=embedding_provider,
@@ -218,7 +216,7 @@ def select_collection(
             and previous_session_id != session.session_id
             and owned_collection.collection_name != session.collection_name
         ):
-            cleared_sessions += int(delete_session(previous_session_id))
+            cleared_sessions += int(_rag_runtime().delete_session(previous_session_id))
     logger.info(
         "Collection selected session_id=%s collection=%s cleared_old_runtime_sessions=%s elapsed_seconds=%.3f",
         session.session_id,
@@ -253,7 +251,7 @@ def active_collection_session(
         raise HTTPException(status_code=403, detail="You do not have access to this collection.")
     if user_collection is None:
         return {"success": True, "active": False, "collection_name": requested_collection, "session_id": ""}
-    session = get_runtime_session(user_collection.session_id or "") if user_collection.session_id else None
+    session = _rag_runtime().get_runtime_session(user_collection.session_id or "") if user_collection.session_id else None
     active = bool(session and session.collection_name == requested_collection)
     return {
         "success": True,
@@ -320,7 +318,7 @@ def rebuild_collection_bm25(
         credentials.effective_qdrant_url,
         credentials.effective_qdrant_api_key,
     ):
-        result = rebuild_bm25_index(requested_collection)
+        result = _rag_runtime().rebuild_bm25_index(requested_collection)
         sync_qdrant_registry()
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "BM25 rebuild failed."))
@@ -375,15 +373,15 @@ def delete_collection(
         credentials.effective_qdrant_api_key,
     ):
         collection_name = ""
-        session = get_runtime_session(session_id)
+        session = _rag_runtime().get_runtime_session(session_id)
         if session:
             collection_name = session.collection_name
 
-        deleted_runtime = delete_session(session_id)
+        deleted_runtime = _rag_runtime().delete_session(session_id)
         deleted_qdrant = False
         if collection_name:
             deleted_qdrant = delete_qdrant_collection(collection_name)
-            delete_sessions_for_collection(collection_name)
+            _rag_runtime().delete_sessions_for_collection(collection_name)
 
         if not deleted_runtime and not deleted_qdrant:
             raise HTTPException(status_code=404, detail="Collection session not found.")
@@ -414,7 +412,7 @@ def delete_collection_by_name(
         credentials.effective_qdrant_api_key,
     ):
         deleted_qdrant = delete_qdrant_collection(requested_collection)
-        delete_sessions_for_collection(requested_collection)
+        _rag_runtime().delete_sessions_for_collection(requested_collection)
         if not deleted_qdrant:
             raise HTTPException(status_code=404, detail="Qdrant collection not found.")
         if user_collection is not None:

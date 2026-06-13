@@ -2,7 +2,6 @@ import re
 import logging
 from collections import Counter
 
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
@@ -117,6 +116,8 @@ def get_chat_model(streaming: bool = True, credentials: RuntimeCredentials | Non
     )
     if credentials.llm_provider == "local_stub":
         return RunnableLambda(_local_stub_response)
+    from langchain_openai import ChatOpenAI
+
     return ChatOpenAI(
         api_key=credentials.require_openai_api_key(),
         model=CHAT_MODEL,
