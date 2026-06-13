@@ -1,0 +1,6 @@
+Alembic migrations for the PostgreSQL auth database.
+
+Run Alembic commands from the backend directory so imports resolve cleanly:
+
+    alembic revision --autogenerate -m "create auth tables"
+    alembic upgrade head

@@ -1,0 +1,20 @@
+[Unit]
+Description=Enterprise RAG Streamlit frontend
+After=network-online.target enterprise-rag-backend.service
+Wants=network-online.target
+Requires=enterprise-rag-backend.service
+
+[Service]
+Type=simple
+User=enterprise-rag
+Group=enterprise-rag
+WorkingDirectory=/opt/enterprise-rag/app
+EnvironmentFile=/etc/enterprise-rag/production.env
+ExecStart=/opt/enterprise-rag/venv/bin/streamlit run frontend/app.py --server.address=127.0.0.1 --server.port=8501 --server.headless=true --browser.gatherUsageStats=false
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
