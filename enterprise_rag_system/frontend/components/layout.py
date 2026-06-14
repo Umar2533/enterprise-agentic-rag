@@ -7,8 +7,8 @@ from components.runtime_secrets import (
     get_secret_value,
     get_key_source,
     init_runtime_secret_state,
+    default_embedding_provider,
     render_compact_api_status,
-    runtime_secret_payload,
 )
 
 
@@ -66,8 +66,8 @@ def init_session_state() -> None:
         "settings_tavily_api_key": "",
         "upload_openai_api_key": "",
         "upload_tavily_api_key": "",
-        "embedding_provider": "huggingface",
-        "pending_embedding_provider": "huggingface",
+        "embedding_provider": default_embedding_provider(),
+        "pending_embedding_provider": default_embedding_provider(),
         "backend_health": {},
         "answer_length": "Short",
         "custom_max_words": 250,
@@ -160,7 +160,7 @@ def render_rag_controls_panel() -> None:
         provider = st.selectbox(
             "Embedding provider",
             ["huggingface", "openai"],
-            index=0 if st.session_state.get("embedding_provider", "huggingface") == "huggingface" else 1,
+            index=0 if st.session_state.get("embedding_provider", default_embedding_provider()) == "huggingface" else 1,
             key="pending_embedding_provider",
         )
         render_compact_api_status()
@@ -277,7 +277,7 @@ def _render_collection_selector() -> None:
             try:
                 attached = select_collection(
                     selected_collection_name,
-                    st.session_state.get("embedding_provider", "huggingface"),
+                    st.session_state.get("embedding_provider", default_embedding_provider()),
                 )
                 session_id = attached.get("session_id")
                 collection_name = attached.get("collection_name") or selected_collection_name
@@ -300,7 +300,10 @@ def _render_collection_selector() -> None:
                 st.session_state.retrieval_warning = attached.get("retrieval_warning", "")
                 st.session_state.filename = attached.get("filename", "existing_qdrant_collection")
                 if attached.get("embedding_provider") not in {"", "unknown", None}:
-                    st.session_state.embedding_provider = attached.get("embedding_provider", "huggingface")
+                    st.session_state.embedding_provider = attached.get(
+                        "embedding_provider",
+                        default_embedding_provider(),
+                    )
                 st.session_state.last_sources = []
                 st.success(f"Active collection: {collection_name} (attached)")
             except ApiClientError as exc:
@@ -400,9 +403,7 @@ def _render_sidebar_upload() -> None:
                 enable_evaluation=st.session_state.rag_enable_evaluation,
                 openai_api_key="" if backend_uses_env_key() else get_ui_openai_key(),
                 tavily_api_key=get_ui_tavily_key(),
-                qdrant_url=runtime_secret_payload()["qdrant_url"],
-                qdrant_api_key=runtime_secret_payload()["qdrant_api_key"],
-                embedding_provider=st.session_state.get("embedding_provider", "huggingface"),
+                embedding_provider=st.session_state.get("embedding_provider", default_embedding_provider()),
                 use_existing_collection=use_existing,
             )
             session_id = result.get("session_id")

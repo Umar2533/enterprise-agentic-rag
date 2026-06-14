@@ -4,14 +4,12 @@ import os
 import html
 from pathlib import Path
 from typing import Dict
-from urllib.parse import urlparse
-
 import requests
 import streamlit as st
 
 
-REQUIRED_KEYS = ("OPENAI_API_KEY", "TAVILY_API_KEY", "QDRANT_URL", "QDRANT_API_KEY")
-WORKSPACE_REQUIRED_KEYS = ("OPENAI_API_KEY", "QDRANT_URL", "QDRANT_API_KEY")
+REQUIRED_KEYS = ("OPENAI_API_KEY", "TAVILY_API_KEY")
+WORKSPACE_REQUIRED_KEYS = ("OPENAI_API_KEY",)
 SERVER_KEY_FLAGS = {
     "OPENAI_API_KEY": "openai_configured",
     "TAVILY_API_KEY": "tavily_configured",
@@ -30,7 +28,7 @@ def init_runtime_secret_state() -> None:
     st.session_state.setdefault(VALIDATION_KEY, {"fingerprint": "", "ok": False, "errors": {}, "warnings": {}})
     for name in REQUIRED_KEYS:
         st.session_state.setdefault(f"{SESSION_KEY_PREFIX}{name}", "")
-    st.session_state.setdefault(USE_OPENAI_KEY, False)
+    st.session_state.setdefault(USE_OPENAI_KEY, production_mvp_active())
     st.session_state.setdefault(FORCE_LOCAL_STUB_KEY, False)
 
 
@@ -76,8 +74,22 @@ def local_test_mode_active() -> bool:
 
 def _workspace_required_keys() -> tuple[str, ...]:
     if local_test_mode_active():
-        return ("QDRANT_URL", "QDRANT_API_KEY")
+        return ()
     return WORKSPACE_REQUIRED_KEYS
+
+
+def production_mvp_active() -> bool:
+    environment = _env_value("ENVIRONMENT").strip().lower()
+    backend_url = _env_value("RAG_API_BASE_URL").strip().lower()
+    return (
+        _env_truthy("RENDER_FREE_MVP")
+        or environment in {"production", "prod"}
+        or ".onrender.com" in backend_url
+    )
+
+
+def default_embedding_provider() -> str:
+    return "openai" if production_mvp_active() else "huggingface"
 
 
 def server_api_configured(backend_health: dict | None = None) -> bool:
@@ -362,10 +374,8 @@ def _render_runtime_key_form(location: str) -> bool:
                 password=True,
                 optional=local_test_mode_active(),
             )
-            _runtime_text_input("QDRANT_URL", "Qdrant URL", "https://your-cluster.qdrant.io")
         with cols[1]:
             _runtime_text_input("TAVILY_API_KEY", "Tavily API key", "tvly-...", password=True, optional=True)
-            _runtime_text_input("QDRANT_API_KEY", "Qdrant API key", "Qdrant API key", password=True)
         submitted = st.form_submit_button("Validate & Continue", type="primary", width="stretch")
 
     if submitted:
@@ -488,21 +498,6 @@ def validate_runtime_keys(values: dict[str, str] | None = None) -> tuple[bool, d
     if tavily_key and len(tavily_key) < 12:
         errors["TAVILY_API_KEY"] = "Use a valid Tavily API key."
 
-    qdrant_url = values.get("QDRANT_URL", "").strip()
-    if qdrant_url and not qdrant_url.startswith(("http://", "https://")):
-        errors["QDRANT_URL"] = "Use a full Qdrant URL starting with http:// or https://."
-
-    if (
-        qdrant_url
-        and values.get("QDRANT_API_KEY", "").strip()
-        and "QDRANT_URL" not in errors
-    ):
-        qdrant_error, qdrant_warning = _validate_qdrant(qdrant_url, values["QDRANT_API_KEY"].strip())
-        if qdrant_error:
-            errors["QDRANT_URL"] = qdrant_error
-        if qdrant_warning:
-            warnings["QDRANT_URL"] = qdrant_warning
-
     ok = not errors
     st.session_state[VALIDATION_KEY] = {
         "fingerprint": _fingerprint(values),
@@ -567,12 +562,6 @@ def render_api_key_setup_panel(location: str = "main") -> bool:
                 help="Optional in local test mode. Used for OpenAI chat generation and OpenAI embeddings when configured.",
             )
             st.caption("Optional. Add your OpenAI key for better answers. Leave empty to use local test mode.")
-            st.text_input(
-                "QDRANT_URL",
-                key="setup_input_QDRANT_URL",
-                placeholder="https://your-cluster.qdrant.io",
-                help="Qdrant cluster URL used for vector collections.",
-            )
         with cols[1]:
             st.text_input(
                 "TAVILY_API_KEY (optional)",
@@ -580,13 +569,6 @@ def render_api_key_setup_panel(location: str = "main") -> bool:
                 key="setup_input_TAVILY_API_KEY",
                 placeholder="tvly-...",
                 help="Optional. Enables web fallback search when configured.",
-            )
-            st.text_input(
-                "QDRANT_API_KEY",
-                type="password",
-                key="setup_input_QDRANT_API_KEY",
-                placeholder="Qdrant API key",
-                help="Required to connect to secured Qdrant clusters.",
             )
         submitted = st.form_submit_button("Validate & Continue", type="primary", width="stretch")
 
@@ -633,9 +615,9 @@ def render_compact_api_status() -> None:
         "OpenAI": status["OPENAI_API_KEY"],
         "Tavily": status["TAVILY_API_KEY"],
         "Qdrant": {
-            "configured": status["QDRANT_URL"]["configured"] and status["QDRANT_API_KEY"]["configured"],
-            "source": _combined_source("QDRANT_URL", "QDRANT_API_KEY"),
-            "masked": status["QDRANT_URL"]["masked"],
+            "configured": bool(server_state.get("qdrant_configured")),
+            "source": "backend" if server_state.get("qdrant_configured") else "missing",
+            "masked": "Configured on backend" if server_state.get("qdrant_configured") else "Missing",
         },
     }
     st.markdown('<div class="sidebar-status-card"><strong>API Status</strong>', unsafe_allow_html=True)
@@ -707,10 +689,8 @@ def render_openai_session_controls() -> None:
 def runtime_secret_payload() -> dict[str, str | bool]:
     use_openai = bool(st.session_state.get(USE_OPENAI_KEY))
     return {
-        "openai_api_key": get_secret_value("OPENAI_API_KEY") if use_openai else "",
+        "openai_api_key": get_secret_value("OPENAI_API_KEY"),
         "tavily_api_key": get_secret_value("TAVILY_API_KEY"),
-        "qdrant_url": get_secret_value("QDRANT_URL"),
-        "qdrant_api_key": get_secret_value("QDRANT_API_KEY"),
         "use_openai": use_openai,
         "force_local_stub": bool(st.session_state.get(FORCE_LOCAL_STUB_KEY)),
     }
@@ -760,35 +740,6 @@ def _dotenv_values() -> dict[str, str]:
         except OSError:
             continue
     return values
-
-
-def _validate_qdrant(url: str, api_key: str) -> tuple[str, str]:
-    parsed = urlparse(url.strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return "Invalid Qdrant URL. Use a full URL like https://your-cluster.qdrant.io.", ""
-
-    headers = {"api-key": api_key}
-    try:
-        response = requests.get(
-            f"{url.rstrip('/')}/collections",
-            headers=headers,
-            timeout=(5, 20),
-        )
-        if response.status_code == 401:
-            return "Invalid Qdrant API key.", ""
-        if response.status_code == 403:
-            return "Qdrant access denied. Check that this API key can read collections.", ""
-        if response.status_code == 404:
-            return "Invalid Qdrant URL. The collections endpoint was not found.", ""
-        if not response.ok:
-            return f"Qdrant connection check failed with HTTP {response.status_code}.", ""
-    except requests.Timeout:
-        return "", "Qdrant connection check timed out after 20 seconds. Credentials were saved for this session, but Qdrant access was not confirmed."
-    except requests.ConnectionError:
-        return "", "Network/DNS issue while checking Qdrant. Credentials were saved for this session, but Qdrant access was not confirmed."
-    except requests.RequestException:
-        return "", "Could not reach Qdrant during validation. Credentials were saved for this session, but Qdrant access was not confirmed."
-    return "", ""
 
 
 def _validate_openai_key(api_key: str) -> str:

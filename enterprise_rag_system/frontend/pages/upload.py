@@ -14,7 +14,7 @@ from components.layout import (
     load_styles,
     validate_build_settings,
 )
-from components.runtime_secrets import has_required_keys, require_runtime_credentials, runtime_secret_payload
+from components.runtime_secrets import default_embedding_provider, has_required_keys, require_runtime_credentials
 from components.sidebar import render_sidebar
 from services.api_client import (
     ApiClientError,
@@ -151,7 +151,7 @@ def _render_settings_card(existing_names: set[str], uploaded_file) -> tuple[str,
         embedding_provider = st.selectbox(
             "Embedding provider",
             ["huggingface", "openai"],
-            index=0 if st.session_state.get("embedding_provider", "huggingface") == "huggingface" else 1,
+            index=0 if st.session_state.get("embedding_provider", default_embedding_provider()) == "huggingface" else 1,
             help="The same provider is used for ingestion and query retrieval.",
         )
         st.session_state.embedding_provider = embedding_provider
@@ -321,8 +321,6 @@ def _run_upload(uploaded_file, collection_name: str, embedding_provider: str, su
                 enable_evaluation=st.session_state["rag_enable_evaluation"],
                 openai_api_key=get_ui_openai_key(),
                 tavily_api_key=get_ui_tavily_key(),
-                qdrant_url=runtime_secret_payload()["qdrant_url"],
-                qdrant_api_key=runtime_secret_payload()["qdrant_api_key"],
                 embedding_provider=embedding_provider,
                 use_existing_collection=False,
             )

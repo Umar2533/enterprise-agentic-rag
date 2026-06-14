@@ -16,6 +16,7 @@ class AppSession extends ChangeNotifier {
   static const _themeModeKey = 'theme_mode';
   static const _jwtTokenKey = 'jwt_token';
   static const _apiKeyKey = 'api_key';
+  static const _openAiApiKeyKey = 'openai_api_key';
 
   String backendUrl = ApiConstants.defaultBaseUrl;
   String sessionId = '';
@@ -25,6 +26,7 @@ class AppSession extends ChangeNotifier {
   ThemeMode themeMode = ThemeMode.system;
   String? jwtToken;
   String? apiKey;
+  String? openAiApiKey;
 
   bool get hasSession => sessionId.trim().isNotEmpty;
   bool get hasCollection => collectionName.trim().isNotEmpty;
@@ -38,6 +40,10 @@ class AppSession extends ChangeNotifier {
     final key = apiKey?.trim() ?? '';
     if (key.isNotEmpty) {
       headersMap['X-API-Key'] = key;
+    }
+    final openAiKey = openAiApiKey?.trim() ?? '';
+    if (openAiKey.isNotEmpty) {
+      headersMap['X-Runtime-OpenAI-Key'] = openAiKey;
     }
     return headersMap;
   }
@@ -60,6 +66,7 @@ class AppSession extends ChangeNotifier {
     themeMode = _themeModeFromString(data[_themeModeKey]?.toString());
     jwtToken = data[_jwtTokenKey]?.toString();
     apiKey = data[_apiKeyKey]?.toString();
+    openAiApiKey = data[_openAiApiKeyKey]?.toString();
     notifyListeners();
   }
 
@@ -111,6 +118,17 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setOpenAiApiKey(String? value) async {
+    openAiApiKey = value?.trim();
+    if (openAiApiKey == null || openAiApiKey!.isEmpty) {
+      openAiApiKey = null;
+      await _removeValues([_openAiApiKeyKey]);
+    } else {
+      await _saveValue(_openAiApiKeyKey, openAiApiKey!);
+    }
+    notifyListeners();
+  }
+
   Future<void> activateSession({
     required String sessionId,
     required String collectionName,
@@ -142,6 +160,7 @@ class AppSession extends ChangeNotifier {
     themeMode = ThemeMode.system;
     jwtToken = null;
     apiKey = null;
+    openAiApiKey = null;
     notifyListeners();
   }
 

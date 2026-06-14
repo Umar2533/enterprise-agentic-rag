@@ -1,3 +1,5 @@
+import '../../../../core/constants/api_constants.dart';
+
 class UploadResult {
   const UploadResult({
     required this.success,
@@ -29,8 +31,9 @@ class UploadResult {
       sessionId: (json['session_id'] ?? '').toString(),
       collectionName: (json['collection_name'] ?? '').toString(),
       filename: (json['filename'] ?? '').toString(),
-      embeddingProvider: (json['embedding_provider'] ?? 'huggingface')
-          .toString(),
+      embeddingProvider:
+          (json['embedding_provider'] ?? ApiConstants.defaultEmbeddingProvider)
+              .toString(),
       retrievalMode: (json['retrieval_mode'] ?? '').toString(),
       retrievalWarning: (json['retrieval_warning'] ?? '').toString(),
       message: (json['message'] ?? '').toString(),

@@ -1,3 +1,5 @@
+import '../../../../core/constants/api_constants.dart';
+
 class HealthStatus {
   const HealthStatus({
     required this.isHealthy,
@@ -24,8 +26,9 @@ class HealthStatus {
       isHealthy: json['success'] == true,
       app: (json['app'] ?? 'Enterprise RAG').toString(),
       vectorDbProvider: (json['vector_db_provider'] ?? 'unknown').toString(),
-      embeddingProvider: (json['embedding_provider'] ?? 'huggingface')
-          .toString(),
+      embeddingProvider:
+          (json['embedding_provider'] ?? ApiConstants.defaultEmbeddingProvider)
+              .toString(),
       supportedEmbeddingProviders: json['supported_embedding_providers'] is List
           ? (json['supported_embedding_providers'] as List)
                 .map((item) => item.toString())

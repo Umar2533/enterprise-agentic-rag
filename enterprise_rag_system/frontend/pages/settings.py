@@ -287,8 +287,6 @@ def _render_system_preferences(backend_health: dict) -> None:
             ("Vector DB", backend_health.get("vector_db_provider") or "-"),
             ("OpenAI key source", get_key_source("OPENAI_API_KEY")),
             ("Tavily key source", get_key_source("TAVILY_API_KEY")),
-            ("Qdrant URL source", get_key_source("QDRANT_URL")),
-            ("Qdrant API key source", get_key_source("QDRANT_API_KEY")),
         ]
         for label, value in rows:
             st.markdown(

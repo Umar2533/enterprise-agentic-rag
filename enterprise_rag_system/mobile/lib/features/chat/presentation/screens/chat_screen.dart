@@ -6,6 +6,7 @@ import '../../data/models/chat_response.dart';
 import '../../data/models/collection_summary.dart';
 import '../../data/models/health_status.dart';
 import '../../data/services/chat_api_service.dart';
+import '../../../../core/constants/api_constants.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/storage/app_session.dart';
 import '../widgets/chat_bubble.dart';
@@ -168,7 +169,9 @@ class _ChatScreenState extends State<ChatScreen> {
     await widget.session?.activateSession(
       sessionId: value.trim(),
       collectionName: widget.session?.collectionName ?? '',
-      embeddingProvider: widget.session?.embeddingProvider ?? 'huggingface',
+      embeddingProvider:
+          widget.session?.embeddingProvider ??
+          ApiConstants.defaultEmbeddingProvider,
     );
     if (!mounted) {
       return;

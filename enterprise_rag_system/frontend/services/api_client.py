@@ -13,7 +13,12 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
-from components.runtime_secrets import clear_runtime_key_state, get_secret_value, runtime_secret_payload
+from components.runtime_secrets import (
+    clear_runtime_key_state,
+    default_embedding_provider,
+    get_secret_value,
+    runtime_secret_payload,
+)
 
 
 API_BASE_URL = os.getenv("RAG_API_BASE_URL", "http://localhost:8000/api/v1").rstrip("/")
@@ -652,9 +657,7 @@ def upload_document(
     enable_evaluation: bool = True,
     openai_api_key: str = "",
     tavily_api_key: str = "",
-    qdrant_url: str = "",
-    qdrant_api_key: str = "",
-    embedding_provider: str = "huggingface",
+    embedding_provider: str = "",
     use_existing_collection: bool = False,
 ) -> Dict[str, Any]:
     cached_list_collections.clear()
@@ -676,11 +679,7 @@ def upload_document(
         "max_iterations": max_iterations,
         "enable_grading": str(enable_grading).lower(),
         "enable_evaluation": str(enable_evaluation).lower(),
-        "openai_api_key": openai_api_key,
-        "tavily_api_key": tavily_api_key,
-        "qdrant_url": qdrant_url,
-        "qdrant_api_key": qdrant_api_key,
-        "embedding_provider": embedding_provider,
+        "embedding_provider": embedding_provider or default_embedding_provider(),
         "use_existing_collection": str(use_existing_collection).lower(),
     }
     return _request(
@@ -688,7 +687,7 @@ def upload_document(
         "/upload/document",
         files=files,
         data=data,
-        headers=_runtime_headers(),
+        headers=_runtime_headers(openai_api_key=openai_api_key, tavily_api_key=tavily_api_key),
         timeout=(CONNECT_TIMEOUT, 600),
     )
 
@@ -710,7 +709,8 @@ def chat(
             "answer_length": answer_length,
             "allow_web_search": allow_web_search,
             "collection_name": collection_name.strip(),
-            **runtime_payload,
+            "use_openai": runtime_payload["use_openai"],
+            "force_local_stub": runtime_payload["force_local_stub"],
         },
         headers=_runtime_headers(),
         timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
@@ -739,7 +739,8 @@ def chat_stream(
                     "answer_length": answer_length,
                     "allow_web_search": allow_web_search,
                     "collection_name": collection_name.strip(),
-                    **runtime_payload,
+                    "use_openai": runtime_payload["use_openai"],
+                    "force_local_stub": runtime_payload["force_local_stub"],
                 },
                 timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
                 stream=True,
@@ -768,7 +769,8 @@ def chat_stream(
                 "answer_length": answer_length,
                 "allow_web_search": allow_web_search,
                 "collection_name": collection_name.strip(),
-                **runtime_payload,
+                "use_openai": runtime_payload["use_openai"],
+                "force_local_stub": runtime_payload["force_local_stub"],
             },
             timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
             stream=True,
@@ -857,13 +859,13 @@ def delete_collection_by_name(collection_name: str) -> Dict[str, Any]:
     )
 
 
-def select_collection(collection_name: str, embedding_provider: str = "huggingface") -> Dict[str, Any]:
+def select_collection(collection_name: str, embedding_provider: str = "") -> Dict[str, Any]:
     return _request(
         "POST",
         "/collections/select",
         json={
             "collection_name": collection_name,
-            "embedding_provider": embedding_provider,
+            "embedding_provider": embedding_provider or default_embedding_provider(),
         },
         headers=_qdrant_headers(),
         timeout=(COLLECTION_ACTIVATION_TIMEOUT, COLLECTION_ACTIVATION_TIMEOUT),
@@ -893,14 +895,12 @@ def rebuild_bm25_index(collection_name: str) -> Dict[str, Any]:
 
 
 def vector_search(session_id: str, query: str) -> Dict[str, Any]:
-    runtime_payload = runtime_secret_payload()
     return _request(
         "POST",
         "/vector/search",
         json={
             "session_id": session_id,
             "query": query,
-            "openai_api_key": runtime_payload["openai_api_key"],
         },
         headers=_runtime_headers(),
         timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
@@ -973,19 +973,17 @@ def unlock_admin_user(user_id: int) -> Dict[str, Any]:
     return _request("POST", f"/admin/users/{user_id}/unlock", timeout=(CONNECT_TIMEOUT, 30))
 
 
-def _runtime_headers() -> dict[str, str]:
+def _runtime_headers(openai_api_key: str = "", tavily_api_key: str = "") -> dict[str, str]:
     payload = runtime_secret_payload()
     headers = {}
-    if payload.get("openai_api_key"):
-        headers["X-Runtime-OpenAI-Api-Key"] = payload["openai_api_key"]
+    runtime_openai_key = openai_api_key.strip() or str(payload.get("openai_api_key") or "").strip()
+    runtime_tavily_key = tavily_api_key.strip() or str(payload.get("tavily_api_key") or "").strip()
+    if runtime_openai_key:
+        headers["X-Runtime-OpenAI-Key"] = runtime_openai_key
     headers["X-Use-OpenAI"] = "true" if payload.get("use_openai") else "false"
     headers["X-Force-Local-Stub"] = "true" if payload.get("force_local_stub") else "false"
-    if payload.get("tavily_api_key"):
-        headers["X-Runtime-Tavily-Api-Key"] = payload["tavily_api_key"]
-    if payload.get("qdrant_url"):
-        headers["X-Runtime-Qdrant-Url"] = payload["qdrant_url"]
-    if payload.get("qdrant_api_key"):
-        headers["X-Runtime-Qdrant-Api-Key"] = payload["qdrant_api_key"]
+    if runtime_tavily_key:
+        headers["X-Runtime-Tavily-Api-Key"] = runtime_tavily_key
     return headers
 
 

@@ -5,9 +5,12 @@ class ApiConstants {
   const ApiConstants._();
 
   // Backend URLs
-  static const String webBaseUrl = 'http://127.0.0.1:8000';
-  static const String androidEmulatorBaseUrl = 'http://10.0.2.2:8000';
-  static const String physicalDeviceBaseUrl = 'http://192.168.100.20:8000';
+  static const String webBaseUrl =
+      'https://enterprise-rag-backend-2u4p.onrender.com';
+  static const String androidEmulatorBaseUrl =
+      'https://enterprise-rag-backend-2u4p.onrender.com';
+  static const String physicalDeviceBaseUrl =
+      'https://enterprise-rag-backend-2u4p.onrender.com';
 
   /// Heuristic to detect if running on an Android emulator in pure Dart.
   static bool get _isAndroidEmulator {
@@ -88,7 +91,20 @@ class ApiConstants {
   }
 
   static const String defaultAnswerLength = 'Medium: 180-250 words';
-  static const String defaultEmbeddingProvider = 'huggingface';
+  static const bool renderFreeMvp = bool.fromEnvironment('RENDER_FREE_MVP');
+  static const String environment = String.fromEnvironment(
+    'ENVIRONMENT',
+    defaultValue: 'development',
+  );
+
+  static String get defaultEmbeddingProvider {
+    final productionBackend = defaultBaseUrl.contains('.onrender.com');
+    return renderFreeMvp ||
+            environment.toLowerCase() == 'production' ||
+            productionBackend
+        ? 'openai'
+        : 'huggingface';
+  }
 
   static const List<String> supportedEmbeddingProviders = [
     'huggingface',

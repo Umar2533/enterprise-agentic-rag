@@ -30,6 +30,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _resetPasswordController;
   late final TextEditingController _jwtTokenController;
   late final TextEditingController _apiKeyController;
+  late final TextEditingController _openAiApiKeyController;
   String? _loginMessage;
   bool _loggingIn = false;
   String? _signupMessage;
@@ -63,6 +64,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _resetPasswordController = TextEditingController();
     _jwtTokenController = TextEditingController(text: widget.session.jwtToken);
     _apiKeyController = TextEditingController(text: widget.session.apiKey);
+    _openAiApiKeyController = TextEditingController(
+      text: widget.session.openAiApiKey,
+    );
   }
 
   @override
@@ -79,12 +83,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _resetPasswordController.dispose();
     _jwtTokenController.dispose();
     _apiKeyController.dispose();
+    _openAiApiKeyController.dispose();
     super.dispose();
   }
 
   Future<void> _saveAuthCredentials() async {
     await widget.session.setJwtToken(_jwtTokenController.text);
     await widget.session.setApiKey(_apiKeyController.text);
+    await widget.session.setOpenAiApiKey(_openAiApiKeyController.text);
   }
 
   Future<void> _login() async {
@@ -963,7 +969,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             fontWeight: FontWeight.w900,
           ),
         ),
-        subtitle: const Text('Manual JWT and API key access'),
+        subtitle: const Text('Manual auth and OpenAI runtime keys'),
         children: [
           Align(
             alignment: Alignment.centerLeft,
@@ -992,6 +998,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             decoration: const InputDecoration(
               labelText: 'API key',
               prefixIcon: Icon(Icons.key_rounded),
+            ),
+            obscureText: true,
+            enableSuggestions: false,
+            autocorrect: false,
+            textInputAction: TextInputAction.done,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _openAiApiKeyController,
+            decoration: const InputDecoration(
+              labelText: 'OpenAI runtime key',
+              prefixIcon: Icon(Icons.auto_awesome_rounded),
             ),
             obscureText: true,
             enableSuggestions: false,
@@ -1195,6 +1213,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         _resetPasswordController.clear();
                         _jwtTokenController.clear();
                         _apiKeyController.clear();
+                        _openAiApiKeyController.clear();
                         setState(() {
                           _loginMessage = null;
                           _signupMessage = null;
