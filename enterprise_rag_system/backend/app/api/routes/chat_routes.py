@@ -18,6 +18,11 @@ from app.services.collections.user_collection_service import (
     get_user_collection_by_session,
     user_owns_session,
 )
+from app.services.render_free_openai_chat import (
+    RenderFreeChatError,
+    chat_render_free_openai,
+    render_free_chat_events,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -140,6 +145,22 @@ def _runtime_credentials(
     )
 
 
+def _render_free_result(
+    request: ChatRequest,
+    openai_api_key: str,
+    collection: UserCollection,
+) -> dict:
+    try:
+        return chat_render_free_openai(
+            collection_name=collection.collection_name,
+            question=request.question,
+            answer_length=request.answer_length,
+            openai_api_key=openai_api_key.strip(),
+        )
+    except RenderFreeChatError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
 def _stream_with_credentials(request: ChatRequest, credentials: RuntimeCredentials):
     from app.services.rag_runtime import stream_session_answer
     from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
@@ -187,10 +208,6 @@ def chat(
         openai_api_key,
         (collection.embedding_provider or "") if collection is not None else "",
     )
-
-    from app.services.rag_runtime import ask_session
-    from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
-
     logger.info(
         "Chat request payload session_id=%s collection=%s question_length=%s answer_length=%s allow_web_search=%s",
         request.session_id,
@@ -201,6 +218,36 @@ def chat(
     )
     _require_session_access(db, current_user, request.session_id)
     _require_collection_access(db, current_user, request.collection_name)
+    if get_settings().render_free_mvp and collection is not None:
+        credentials = _runtime_credentials(request, openai_api_key)
+        _log_llm_selection(credentials)
+        result = _render_free_result(request, openai_api_key, collection)
+        return ChatResponse(
+            success=True,
+            answer=result["answer"],
+            search_type=result["search_type"],
+            evaluation=result["evaluation"],
+            iteration_count=result["iteration_count"],
+            retrieved_docs_count=result["retrieved_docs_count"],
+            web_results_count=0,
+            confidence_level=result["confidence_level"],
+            retrieval_mode=result["retrieval_mode"],
+            retrieval_warning=result["retrieval_warning"],
+            llm_provider="openai",
+            llm_model=result["llm_model"],
+            runtime_openai_active=True,
+            llm_fallback_status="not_used",
+            web_search_used=False,
+            web_search_available=False,
+            web_search_requires_approval=False,
+            trace_steps=result["trace_steps"],
+            trace=[TraceStep(**step) for step in result["trace"]],
+            sources=result["sources"],
+        )
+
+    from app.services.rag_runtime import ask_session
+    from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
+
     credentials = _runtime_credentials(request, openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
     _ensure_render_free_openai_session(request, credentials, collection)
     _log_collection_context(request)
@@ -309,6 +356,15 @@ def chat_stream(
 
     _require_session_access(db, current_user, request.session_id)
     _require_collection_access(db, current_user, request.collection_name)
+    if get_settings().render_free_mvp and collection is not None:
+        credentials = _runtime_credentials(request, openai_api_key)
+        _log_llm_selection(credentials)
+        result = _render_free_result(request, openai_api_key, collection)
+        return StreamingResponse(
+            render_free_chat_events(result),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
     credentials = _runtime_credentials(request, openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
     _ensure_render_free_openai_session(request, credentials, collection)
     _log_collection_context(request)
