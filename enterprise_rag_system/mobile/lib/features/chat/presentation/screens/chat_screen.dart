@@ -183,6 +183,17 @@ class _ChatScreenState extends State<ChatScreen> {
     if (trimmedQuestion.isEmpty || !_canSend) {
       return;
     }
+    final collectionName =
+        (_activeCollection?.collectionName ??
+                widget.session?.collectionName ??
+                '')
+            .trim();
+    if (collectionName.isEmpty) {
+      setState(() {
+        _errorMessage = 'Select a collection before chatting.';
+      });
+      return;
+    }
 
     setState(() {
       _lastQuestion = trimmedQuestion;
@@ -196,6 +207,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final response = await _apiService.sendMessage(
         ChatRequest(
           sessionId: _sessionId.trim(),
+          collectionName: collectionName,
           question: trimmedQuestion,
           allowWebSearch: _allowWebSearch,
         ),
