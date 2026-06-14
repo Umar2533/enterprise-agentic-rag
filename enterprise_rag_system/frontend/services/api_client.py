@@ -682,12 +682,16 @@ def upload_document(
         "embedding_provider": embedding_provider or default_embedding_provider(),
         "use_existing_collection": str(use_existing_collection).lower(),
     }
+    saved_runtime_openai_key = get_secret_value("OPENAI_API_KEY")
     return _request(
         "POST",
         "/upload/document",
         files=files,
         data=data,
-        headers=_runtime_headers(openai_api_key=openai_api_key, tavily_api_key=tavily_api_key),
+        headers=_runtime_headers(
+            openai_api_key=saved_runtime_openai_key or openai_api_key,
+            tavily_api_key=tavily_api_key,
+        ),
         timeout=(CONNECT_TIMEOUT, 600),
     )
 
