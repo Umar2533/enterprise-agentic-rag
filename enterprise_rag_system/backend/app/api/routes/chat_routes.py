@@ -204,6 +204,39 @@ def chat(
     db: Session = Depends(get_db),
 ):
     collection = _chat_collection(db, current_user, request)
+    if get_settings().render_free_mvp:
+        collection_found = collection is not None
+        embedding_provider = (
+            (collection.embedding_provider or "").strip()
+            if collection_found
+            else ""
+        )
+        logger.warning(
+            "Render Free chat debug collection_name=%s session_id=%s "
+            "user_id=%s user_email=%s user_role=%s "
+            "user_collection_found=%s embedding_provider=%s",
+            request.collection_name or "",
+            request.session_id,
+            current_user.id,
+            current_user.email,
+            current_user.role,
+            collection_found,
+            embedding_provider or "<missing>",
+        )
+        if (openai_api_key or "").strip() and embedding_provider.lower() != "openai":
+            disabled_branch = (
+                "user_collection_not_found"
+                if not collection_found
+                else "collection_embedding_provider_not_openai"
+            )
+            logger.warning(
+                "Render Free chat returning disabled 503 branch=%s "
+                "collection_name=%s session_id=%s user_id=%s",
+                disabled_branch,
+                request.collection_name or "",
+                request.session_id,
+                current_user.id,
+            )
     require_render_free_openai(
         openai_api_key,
         (collection.embedding_provider or "") if collection is not None else "",
