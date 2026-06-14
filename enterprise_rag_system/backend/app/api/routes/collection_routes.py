@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_user, require_admin, require_api_key
 from app.core.config import get_settings
 from app.core.constants import DEFAULT_COLLECTION, DEFAULT_EMBEDDING_PROVIDER
-from app.core.rag_mode import require_rag_runtime
+from app.core.rag_mode import RAG_RUNTIME_DISABLED_MESSAGE, require_rag_runtime
 from app.core.runtime_credentials import RuntimeCredentials
 from app.db.database import get_db
 from app.models.user import User
@@ -28,11 +28,27 @@ from app.services.collections.user_collection_service import (
     update_user_collection_session,
     user_owns_session,
 )
-from app.services.llm.embeddings_service import UnsupportedEmbeddingProviderError, normalize_embedding_provider
 from app.services.memory.memory_store import get_collection_memory, memory_stats
 
 router = APIRouter(prefix="/collections", tags=["collections"])
 logger = logging.getLogger(__name__)
+
+
+def _normalize_embedding_provider(provider: str | None) -> str:
+    normalized = (provider or "").strip().lower()
+    if normalized in {
+        "",
+        "unknown",
+        "none",
+        "null",
+        "huggingface",
+        "sentence-transformers",
+        "sentence_transformers",
+    }:
+        return DEFAULT_EMBEDDING_PROVIDER
+    if normalized == "openai":
+        return "openai"
+    raise ValueError(f"Unsupported embedding provider: {provider}")
 
 
 def _rag_runtime():
@@ -93,7 +109,7 @@ def _collection_item(
         "filename": user_collection.filename
         or runtime_item.get("filename")
         or "existing_qdrant_collection",
-        "embedding_provider": normalize_embedding_provider(
+        "embedding_provider": _normalize_embedding_provider(
             user_collection.embedding_provider
             or runtime_item.get("embedding_provider")
             or registry_item.get("embedding_provider")
@@ -172,19 +188,58 @@ def select_collection(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    require_rag_runtime()
-    qdrant = _qdrant_support()
-
     if not request.collection_name.strip():
         raise HTTPException(status_code=400, detail="Collection name is required.")
     requested_collection = request.collection_name.strip()
     user_collection = get_user_collection_by_name(db, current_user.id, requested_collection)
-    if user_collection is None and not (current_user.is_superuser or current_user.role == "admin"):
+    is_admin = current_user.is_superuser or current_user.role == "admin"
+    if user_collection is None and is_admin:
+        user_collection = next(
+            (
+                item
+                for item in get_all_active_user_collections(db)
+                if item.collection_name == requested_collection
+            ),
+            None,
+        )
+    if user_collection is None and not is_admin:
         raise HTTPException(status_code=403, detail="You do not have access to this collection.")
+    if user_collection is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+
+    if get_settings().render_free_mvp:
+        try:
+            requested_provider = _normalize_embedding_provider(request.embedding_provider)
+            stored_provider = _normalize_embedding_provider(user_collection.embedding_provider)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if requested_provider != "openai" or stored_provider != "openai":
+            raise HTTPException(status_code=503, detail=RAG_RUNTIME_DISABLED_MESSAGE)
+
+        session_id = uuid.uuid4().hex
+        user_collection = update_user_collection_session(
+            db,
+            user_collection_id=user_collection.id,
+            session_id=session_id,
+        )
+        return {
+            "success": True,
+            "session_id": session_id,
+            "collection_name": user_collection.collection_name,
+            "display_name": user_collection.display_name or user_collection.collection_name,
+            "filename": user_collection.filename or "existing_qdrant_collection",
+            "embedding_provider": "openai",
+            "selected_at": datetime.now(timezone.utc).isoformat(),
+            "retrieval_mode": "dense only",
+            "retrieval_warning": "BM25 index is not available in Render Free MVP mode.",
+        }
+
+    require_rag_runtime()
+    qdrant = _qdrant_support()
     credentials = _runtime_credentials_from_headers(openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
     started = time.monotonic()
     try:
-        embedding_provider = normalize_embedding_provider(request.embedding_provider)
+        embedding_provider = _normalize_embedding_provider(request.embedding_provider)
         logger.info(
             "Collection select payload collection=%s embedding_provider=%s qdrant_host=%s",
             requested_collection,
@@ -211,7 +266,7 @@ def select_collection(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except qdrant.QdrantConfigurationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except UnsupportedEmbeddingProviderError as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Collection selection failed: {credentials.redact(exc)}") from exc
@@ -280,7 +335,7 @@ def active_collection_session(
         "collection_name": user_collection.collection_name,
         "display_name": user_collection.display_name or user_collection.collection_name,
         "filename": user_collection.filename or "existing_qdrant_collection",
-        "embedding_provider": normalize_embedding_provider(user_collection.embedding_provider),
+        "embedding_provider": _normalize_embedding_provider(user_collection.embedding_provider),
         "selected_at": datetime.now(timezone.utc).isoformat(),
         "retrieval_mode": session.retrieval_mode if session else "",
         "retrieval_warning": session.retrieval_warning if session else "",
