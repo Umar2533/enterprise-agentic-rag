@@ -25,7 +25,6 @@ from app.api.routes import (
 )
 from app.core.config import limiter, settings, validate_production_settings
 from app.core.runtime_credentials import redact_secrets_text
-from app.services.vectordb.collection_service import sync_qdrant_registry
 
 
 logging.basicConfig(level=logging.INFO)
@@ -199,6 +198,9 @@ app.include_router(admin_routes.router, prefix=settings.api_prefix)
 
 @app.on_event("startup")
 def startup_sync_collections():
+    if settings.render_free_mvp:
+        logger.info("Startup Qdrant registry sync disabled for Render Free MVP.")
+        return
     Thread(target=_sync_collections_best_effort, name="qdrant-registry-sync", daemon=True).start()
 
 
@@ -225,6 +227,8 @@ async def install_windows_disconnect_handler():
 
 def _sync_collections_best_effort() -> None:
     try:
+        from app.services.vectordb.collection_service import sync_qdrant_registry
+
         sync_qdrant_registry()
     except Exception as exc:
         # Registry sync is best-effort; collection routes refresh it when needed.

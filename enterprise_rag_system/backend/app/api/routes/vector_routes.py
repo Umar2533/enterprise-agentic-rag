@@ -3,12 +3,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, require_api_key
+from app.core.config import get_settings
+from app.core.rag_mode import require_rag_runtime
+from app.core.vector_db_registry import SUPPORTED_VECTOR_DBS
 from app.core.runtime_credentials import RuntimeCredentials
 from app.db.database import get_db
 from app.models.user import User
 from app.services.collections.user_collection_service import user_owns_session
-from app.services.vectordb.collection_service import vector_provider_info
-from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
 
 router = APIRouter(tags=["vectors"])
 
@@ -21,7 +22,12 @@ class VectorSearchRequest(BaseModel):
 
 @router.get("/vectors/provider")
 def provider_info():
-    return {"success": True, **vector_provider_info()}
+    settings = get_settings()
+    return {
+        "success": True,
+        "active_provider": settings.vector_db_provider,
+        "supported_providers": list(SUPPORTED_VECTOR_DBS.keys()),
+    }
 
 
 @router.post("/vector/search", dependencies=[Depends(require_api_key), Depends(get_current_user)])
@@ -34,7 +40,10 @@ def vector_search(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_rag_runtime()
+
     from app.services.rag_runtime import retrieve_session_sources
+    from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
 
     if not request.session_id or (
         not (current_user.is_superuser or current_user.role == "admin")

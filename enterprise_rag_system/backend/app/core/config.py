@@ -69,6 +69,10 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("LOCAL_TEST_MODE", "local_test_mode"),
     )
+    render_free_mvp: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("RENDER_FREE_MVP", "render_free_mvp"),
+    )
     openai_fallback_on_error: bool = Field(
         default=False,
         validation_alias=AliasChoices("OPENAI_FALLBACK_ON_ERROR", "openai_fallback_on_error"),

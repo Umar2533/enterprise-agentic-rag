@@ -2,8 +2,8 @@ import csv
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from langchain_core.documents import Document
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,6 +13,11 @@ from app.core.constants import (
     OPENAI_EMBEDDING_MODEL,
 )
 from app.models.collection_build_summary import CollectionBuildSummary
+
+if TYPE_CHECKING:
+    from langchain_core.documents import Document
+else:
+    Document = Any
 
 
 def utc_now() -> datetime:

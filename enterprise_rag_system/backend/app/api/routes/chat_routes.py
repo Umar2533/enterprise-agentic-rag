@@ -6,12 +6,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, require_api_key
+from app.core.rag_mode import require_rag_runtime
 from app.core.runtime_credentials import RuntimeCredentials
 from app.db.database import get_db
 from app.models.user import User
 from app.schemas.chat_schema import ChatRequest, ChatResponse, TraceStep
 from app.services.collections.user_collection_service import get_user_collection_by_name, user_owns_session
-from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -94,6 +94,7 @@ def _runtime_credentials(
 
 def _stream_with_credentials(request: ChatRequest, credentials: RuntimeCredentials):
     from app.services.rag_runtime import stream_session_answer
+    from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
 
     try:
         with qdrant_runtime_credentials(
@@ -133,7 +134,10 @@ def chat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_rag_runtime()
+
     from app.services.rag_runtime import ask_session
+    from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
 
     logger.info(
         "Chat request payload session_id=%s collection=%s question_length=%s answer_length=%s allow_web_search=%s",
@@ -244,6 +248,8 @@ def chat_stream(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_rag_runtime()
+
     _require_session_access(db, current_user, request.session_id)
     _require_collection_access(db, current_user, request.collection_name)
     _log_collection_context(request)

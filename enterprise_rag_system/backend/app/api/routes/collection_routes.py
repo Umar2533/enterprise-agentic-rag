@@ -8,7 +8,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, require_admin, require_api_key
+from app.core.config import get_settings
 from app.core.constants import DEFAULT_COLLECTION, DEFAULT_EMBEDDING_PROVIDER
+from app.core.rag_mode import require_rag_runtime
 from app.core.runtime_credentials import RuntimeCredentials
 from app.db.database import get_db
 from app.models.user import User
@@ -28,22 +30,30 @@ from app.services.collections.user_collection_service import (
 )
 from app.services.llm.embeddings_service import UnsupportedEmbeddingProviderError, normalize_embedding_provider
 from app.services.memory.memory_store import get_collection_memory, memory_stats
-from app.services.vectordb.collection_service import delete_qdrant_collection, sync_qdrant_registry
-from app.services.vectordb.qdrant_service import (
-    QdrantConfigurationError,
-    QdrantHostResolutionError,
-    qdrant_runtime_credentials,
-    sanitized_qdrant_host,
-)
 
 router = APIRouter(prefix="/collections", tags=["collections"])
 logger = logging.getLogger(__name__)
 
 
 def _rag_runtime():
+    require_rag_runtime()
     from app.services import rag_runtime
 
     return rag_runtime
+
+
+def _qdrant_support():
+    require_rag_runtime()
+    from app.services.vectordb import qdrant_service
+
+    return qdrant_service
+
+
+def _collection_service():
+    require_rag_runtime()
+    from app.services.vectordb import collection_service
+
+    return collection_service
 
 
 class SelectCollectionRequest(BaseModel):
@@ -111,40 +121,45 @@ def list_collections(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    credentials = _runtime_credentials_from_headers(openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
-    with qdrant_runtime_credentials(
-        credentials.effective_qdrant_url,
-        credentials.effective_qdrant_api_key,
-    ):
-        registered_collections = sync_qdrant_registry()
-        sessions = _rag_runtime().list_sessions()
-        runtime_by_name = {session["collection_name"]: session for session in sessions}
-        registry_by_name = {
-            item["collection_name"]: item
-            for item in registered_collections
-            if item.get("collection_name")
-        }
-        is_admin = current_user.is_superuser or current_user.role == "admin"
-        user_collections = (
-            get_all_active_user_collections(db)
-            if is_admin
-            else get_user_collections(db, current_user.id)
+    registered_collections = []
+    sessions = []
+    if not get_settings().render_free_mvp:
+        credentials = _runtime_credentials_from_headers(openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
+        qdrant = _qdrant_support()
+        with qdrant.qdrant_runtime_credentials(
+            credentials.effective_qdrant_url,
+            credentials.effective_qdrant_api_key,
+        ):
+            registered_collections = _collection_service().sync_qdrant_registry()
+            sessions = _rag_runtime().list_sessions()
+
+    runtime_by_name = {session["collection_name"]: session for session in sessions}
+    registry_by_name = {
+        item["collection_name"]: item
+        for item in registered_collections
+        if item.get("collection_name")
+    }
+    is_admin = current_user.is_superuser or current_user.role == "admin"
+    user_collections = (
+        get_all_active_user_collections(db)
+        if is_admin
+        else get_user_collections(db, current_user.id)
+    )
+    collection_items = [
+        _collection_item(
+            user_collection,
+            runtime_by_name,
+            registry_by_name,
+            include_owner=is_admin,
         )
-        collection_items = [
-            _collection_item(
-                user_collection,
-                runtime_by_name,
-                registry_by_name,
-                include_owner=is_admin,
-            )
-            for user_collection in user_collections
-        ]
-        return {
-            "success": True,
-            "collections": collection_items,
-            "default_collection": DEFAULT_COLLECTION,
-            "message": "User collections listed.",
-        }
+        for user_collection in user_collections
+    ]
+    return {
+        "success": True,
+        "collections": collection_items,
+        "default_collection": DEFAULT_COLLECTION,
+        "message": "User collections listed.",
+    }
 
 
 @router.post("/select", dependencies=[Depends(require_api_key)])
@@ -157,6 +172,9 @@ def select_collection(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_rag_runtime()
+    qdrant = _qdrant_support()
+
     if not request.collection_name.strip():
         raise HTTPException(status_code=400, detail="Collection name is required.")
     requested_collection = request.collection_name.strip()
@@ -171,9 +189,9 @@ def select_collection(
             "Collection select payload collection=%s embedding_provider=%s qdrant_host=%s",
             requested_collection,
             embedding_provider,
-            sanitized_qdrant_host(credentials.effective_qdrant_url),
+            qdrant.sanitized_qdrant_host(credentials.effective_qdrant_url),
         )
-        with qdrant_runtime_credentials(
+        with qdrant.qdrant_runtime_credentials(
             credentials.effective_qdrant_url,
             credentials.effective_qdrant_api_key,
         ):
@@ -189,9 +207,9 @@ def select_collection(
                 time.monotonic() - qdrant_started,
                 requested_collection,
             )
-    except QdrantHostResolutionError as exc:
+    except qdrant.QdrantHostResolutionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except QdrantConfigurationError as exc:
+    except qdrant.QdrantConfigurationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except UnsupportedEmbeddingProviderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -251,7 +269,9 @@ def active_collection_session(
         raise HTTPException(status_code=403, detail="You do not have access to this collection.")
     if user_collection is None:
         return {"success": True, "active": False, "collection_name": requested_collection, "session_id": ""}
-    session = _rag_runtime().get_runtime_session(user_collection.session_id or "") if user_collection.session_id else None
+    session = None
+    if user_collection.session_id and not get_settings().render_free_mvp:
+        session = _rag_runtime().get_runtime_session(user_collection.session_id)
     active = bool(session and session.collection_name == requested_collection)
     return {
         "success": True,
@@ -309,17 +329,20 @@ def rebuild_collection_bm25(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_rag_runtime()
+    qdrant = _qdrant_support()
+
     requested_collection = collection_name.strip()
     user_collection = get_user_collection_by_name(db, current_user.id, requested_collection)
     if user_collection is None and not (current_user.is_superuser or current_user.role == "admin"):
         raise HTTPException(status_code=403, detail="You do not have access to this collection.")
     credentials = _runtime_credentials_from_headers(openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
-    with qdrant_runtime_credentials(
+    with qdrant.qdrant_runtime_credentials(
         credentials.effective_qdrant_url,
         credentials.effective_qdrant_api_key,
     ):
         result = _rag_runtime().rebuild_bm25_index(requested_collection)
-        sync_qdrant_registry()
+        _collection_service().sync_qdrant_registry()
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "BM25 rebuild failed."))
     return result
@@ -364,11 +387,14 @@ def delete_collection(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_rag_runtime()
+    qdrant = _qdrant_support()
+
     is_admin = current_user.is_superuser or current_user.role == "admin"
     if not is_admin and not user_owns_session(db, current_user.id, session_id):
         raise HTTPException(status_code=403, detail="You do not have access to this collection.")
     credentials = _runtime_credentials_from_headers(openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
-    with qdrant_runtime_credentials(
+    with qdrant.qdrant_runtime_credentials(
         credentials.effective_qdrant_url,
         credentials.effective_qdrant_api_key,
     ):
@@ -380,7 +406,7 @@ def delete_collection(
         deleted_runtime = _rag_runtime().delete_session(session_id)
         deleted_qdrant = False
         if collection_name:
-            deleted_qdrant = delete_qdrant_collection(collection_name)
+            deleted_qdrant = _collection_service().delete_qdrant_collection(collection_name)
             _rag_runtime().delete_sessions_for_collection(collection_name)
 
         if not deleted_runtime and not deleted_qdrant:
@@ -401,17 +427,20 @@ def delete_collection_by_name(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_rag_runtime()
+    qdrant = _qdrant_support()
+
     requested_collection = collection_name.strip()
     is_admin = current_user.is_superuser or current_user.role == "admin"
     user_collection = get_user_collection_by_name(db, current_user.id, requested_collection)
     if not is_admin and user_collection is None:
         raise HTTPException(status_code=403, detail="You do not have access to this collection.")
     credentials = _runtime_credentials_from_headers(openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
-    with qdrant_runtime_credentials(
+    with qdrant.qdrant_runtime_credentials(
         credentials.effective_qdrant_url,
         credentials.effective_qdrant_api_key,
     ):
-        deleted_qdrant = delete_qdrant_collection(requested_collection)
+        deleted_qdrant = _collection_service().delete_qdrant_collection(requested_collection)
         _rag_runtime().delete_sessions_for_collection(requested_collection)
         if not deleted_qdrant:
             raise HTTPException(status_code=404, detail="Qdrant collection not found.")

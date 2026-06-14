@@ -14,17 +14,12 @@ from app.core.constants import (
     DEFAULT_TOP_K,
 )
 from app.core.config import get_settings
+from app.core.rag_mode import require_rag_runtime
 from app.core.runtime_credentials import RuntimeCredentials
 from app.db.database import get_db
 from app.models.user import User
 from app.schemas.collection_build_summary_schema import CollectionBuildSummaryResponse
 from app.schemas.ingestion_schema import IngestionResponse
-from app.services.collections.collection_build_summary_service import (
-    document_units,
-    file_type_from_path,
-    get_collection_build_summary,
-    upsert_collection_build_summary,
-)
 from app.services.collections.user_collection_service import (
     create_user_collection,
     get_user_collection_by_display_name,
@@ -36,7 +31,6 @@ from app.services.ingestion.document_validator import (
     sanitize_filename,
     validate_upload,
 )
-from app.services.vectordb.collection_service import document_hash_exists, ingestion_collection_exists
 
 router = APIRouter(tags=["ingestion"])
 logger = logging.getLogger(__name__)
@@ -74,8 +68,17 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_rag_runtime()
+
+    from app.services.collections.collection_build_summary_service import (
+        document_units,
+        file_type_from_path,
+        get_collection_build_summary,
+        upsert_collection_build_summary,
+    )
     from app.services.ingestion.pipeline import compute_document_hash
     from app.services.rag_runtime import create_rag_session, select_existing_collection
+    from app.services.vectordb.collection_service import document_hash_exists, ingestion_collection_exists
 
     settings = get_settings()
     content = await file.read()
