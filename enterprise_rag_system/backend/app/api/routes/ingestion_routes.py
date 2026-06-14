@@ -31,6 +31,11 @@ from app.services.ingestion.document_validator import (
     sanitize_filename,
     validate_upload,
 )
+from app.services.ingestion.render_free_openai import (
+    RenderFreeCollectionExistsError,
+    RenderFreeIngestionError,
+    ingest_render_free_openai,
+)
 
 router = APIRouter(tags=["ingestion"])
 logger = logging.getLogger(__name__)
@@ -80,10 +85,6 @@ async def upload_document(
         get_collection_build_summary,
         upsert_collection_build_summary,
     )
-    from app.services.ingestion.pipeline import compute_document_hash
-    from app.services.rag_runtime import create_rag_session, select_existing_collection
-    from app.services.vectordb.collection_service import document_hash_exists, ingestion_collection_exists
-
     settings = get_settings()
     content = await file.read()
 
@@ -132,6 +133,95 @@ async def upload_document(
         enable_grading,
         enable_evaluation,
     )
+    if settings.render_free_mvp:
+        try:
+            result = ingest_render_free_openai(
+                file_path=file_path,
+                filename=file.filename or saved_name,
+                collection_name=target_collection,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                openai_api_key=runtime_openai_key,
+                use_existing_collection=use_existing_collection,
+            )
+            create_user_collection(
+                db,
+                user_id=current_user.id,
+                collection_name=result.collection_name,
+                display_name=display_name,
+                session_id=result.session_id,
+                filename=result.filename,
+                embedding_provider="openai",
+                source="upload",
+            )
+            if result.skipped:
+                summary = get_collection_build_summary(db, result.collection_name, current_user.id)
+                return IngestionResponse(
+                    success=True,
+                    session_id=result.session_id,
+                    collection_name=result.collection_name,
+                    display_name=display_name,
+                    filename=result.filename,
+                    embedding_provider="openai",
+                    retrieval_mode="dense only",
+                    retrieval_warning="BM25 index is not available in Render Free MVP mode.",
+                    message="Document already exists",
+                    skipped=True,
+                    summary=CollectionBuildSummaryResponse.model_validate(summary) if summary else None,
+                )
+
+            file_type = file_type_from_path(file_path)
+            document_units_label, document_units_value = document_units(
+                file_path,
+                file_type,
+                result.chunks,
+            )
+            summary = upsert_collection_build_summary(
+                db,
+                user_id=current_user.id,
+                collection_name=result.collection_name,
+                document_name=saved_name,
+                file_type=file_type,
+                document_units_label=document_units_label,
+                document_units_value=document_units_value,
+                chunks_created=len(result.chunks),
+                vectors_stored=len(result.chunks),
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                embedding_provider="openai",
+            )
+            return IngestionResponse(
+                success=True,
+                session_id=result.session_id,
+                collection_name=result.collection_name,
+                display_name=display_name,
+                filename=result.filename,
+                embedding_provider="openai",
+                retrieval_mode="dense only",
+                retrieval_warning="BM25 index is not available in Render Free MVP mode.",
+                message="Knowledge base is ready.",
+                summary=CollectionBuildSummaryResponse.model_validate(summary),
+            )
+        except HTTPException:
+            raise
+        except RenderFreeCollectionExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RenderFreeIngestionError as exc:
+            db.rollback()
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            db.rollback()
+            credentials = RuntimeCredentials.from_values(openai_api_key=runtime_openai_key, use_openai=True)
+            logger.exception("Render Free OpenAI upload failed")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Knowledge base build failed: {credentials.redact(exc)}",
+            ) from exc
+
+    from app.services.ingestion.pipeline import compute_document_hash
+    from app.services.rag_runtime import create_rag_session, select_existing_collection
+    from app.services.vectordb.collection_service import document_hash_exists, ingestion_collection_exists
+
     document_hash = compute_document_hash(str(file_path))
 
     from app.services.vectordb.qdrant_service import (
