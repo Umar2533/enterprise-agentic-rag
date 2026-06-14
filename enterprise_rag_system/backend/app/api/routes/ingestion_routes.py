@@ -14,7 +14,7 @@ from app.core.constants import (
     DEFAULT_TOP_K,
 )
 from app.core.config import get_settings
-from app.core.rag_mode import require_rag_runtime
+from app.core.rag_mode import require_render_free_openai
 from app.core.runtime_credentials import RuntimeCredentials
 from app.db.database import get_db
 from app.models.user import User
@@ -59,7 +59,7 @@ async def upload_document(
     tavily_api_key: str = Form(""),
     qdrant_url: str = Form(""),
     qdrant_api_key: str = Form(""),
-    runtime_openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Api-Key"),
+    runtime_openai_key: str = Header("", alias="X-Runtime-OpenAI-Key"),
     runtime_tavily_api_key: str = Header("", alias="X-Runtime-Tavily-Api-Key"),
     runtime_qdrant_url: str = Header("", alias="X-Runtime-Qdrant-Url"),
     runtime_qdrant_api_key: str = Header("", alias="X-Runtime-Qdrant-Api-Key"),
@@ -68,7 +68,11 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    require_rag_runtime()
+    try:
+        embedding_provider = normalize_embedding_provider(embedding_provider)
+    except UnsupportedEmbeddingProviderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    require_render_free_openai(runtime_openai_key, embedding_provider)
 
     from app.services.collections.collection_build_summary_service import (
         document_units,
@@ -116,10 +120,6 @@ async def upload_document(
         if existing_user_collection is not None
         else physical_collection_name(current_user.id, display_name)
     )
-    try:
-        embedding_provider = normalize_embedding_provider(embedding_provider)
-    except UnsupportedEmbeddingProviderError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     logger.info(
         "Upload request collection=%s embedding_provider=%s use_existing_collection=%s chunk_size=%s chunk_overlap=%s top_k=%s max_iterations=%s enable_grading=%s enable_evaluation=%s",
         target_collection,
@@ -140,12 +140,18 @@ async def upload_document(
         qdrant_runtime_credentials,
     )
 
-    credentials = RuntimeCredentials.from_values(
-        openai_api_key=runtime_openai_api_key or openai_api_key,
-        tavily_api_key=runtime_tavily_api_key or tavily_api_key,
-        qdrant_url=runtime_qdrant_url or qdrant_url,
-        qdrant_api_key=runtime_qdrant_api_key or qdrant_api_key,
-    )
+    if settings.render_free_mvp:
+        credentials = RuntimeCredentials.from_values(
+            openai_api_key=runtime_openai_key,
+            use_openai=True,
+        )
+    else:
+        credentials = RuntimeCredentials.from_values(
+            openai_api_key=runtime_openai_key or openai_api_key,
+            tavily_api_key=runtime_tavily_api_key or tavily_api_key,
+            qdrant_url=runtime_qdrant_url or qdrant_url,
+            qdrant_api_key=runtime_qdrant_api_key or qdrant_api_key,
+        )
 
     with qdrant_runtime_credentials(
         credentials.effective_qdrant_url,

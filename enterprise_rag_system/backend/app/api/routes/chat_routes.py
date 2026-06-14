@@ -6,12 +6,18 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, require_api_key
-from app.core.rag_mode import require_rag_runtime
+from app.core.config import get_settings
+from app.core.rag_mode import require_render_free_openai
 from app.core.runtime_credentials import RuntimeCredentials
 from app.db.database import get_db
 from app.models.user import User
+from app.models.user_collection import UserCollection
 from app.schemas.chat_schema import ChatRequest, ChatResponse, TraceStep
-from app.services.collections.user_collection_service import get_user_collection_by_name, user_owns_session
+from app.services.collections.user_collection_service import (
+    get_user_collection_by_name,
+    get_user_collection_by_session,
+    user_owns_session,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -54,6 +60,43 @@ def _require_collection_access(db: Session, user: User, collection_name: str | N
         )
 
 
+def _chat_collection(db: Session, user: User, request: ChatRequest) -> UserCollection | None:
+    collection = get_user_collection_by_session(
+        db,
+        request.session_id,
+        None if _is_admin(user) else user.id,
+    )
+    if collection is None and request.collection_name:
+        collection = get_user_collection_by_name(db, user.id, request.collection_name.strip())
+    return collection
+
+
+def _ensure_render_free_openai_session(
+    request: ChatRequest,
+    credentials: RuntimeCredentials,
+    collection: UserCollection | None,
+) -> None:
+    if not get_settings().render_free_mvp or collection is None:
+        return
+
+    from app.services.rag_runtime import get_runtime_session, select_existing_collection
+    from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
+
+    session = get_runtime_session(request.session_id)
+    if session is not None and session.collection_name == collection.collection_name:
+        return
+    with qdrant_runtime_credentials(
+        credentials.effective_qdrant_url,
+        credentials.effective_qdrant_api_key,
+    ):
+        select_existing_collection(
+            session_id=request.session_id,
+            collection_name=collection.collection_name,
+            embedding_provider="openai",
+            credentials=credentials,
+        )
+
+
 def _log_collection_context(request: ChatRequest) -> None:
     from app.services.rag_runtime import get_runtime_session
 
@@ -82,6 +125,11 @@ def _runtime_credentials(
     qdrant_url: str = "",
     qdrant_api_key: str = "",
 ) -> RuntimeCredentials:
+    if get_settings().render_free_mvp:
+        return RuntimeCredentials.from_values(
+            openai_api_key=openai_api_key,
+            use_openai=True,
+        )
     return RuntimeCredentials.from_values(
         openai_api_key=openai_api_key or request.openai_api_key,
         tavily_api_key=tavily_api_key or request.tavily_api_key,
@@ -127,14 +175,18 @@ def _stream_with_credentials(request: ChatRequest, credentials: RuntimeCredentia
 @router.post("", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 def chat(
     request: ChatRequest,
-    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Api-Key"),
+    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Key"),
     tavily_api_key: str = Header("", alias="X-Runtime-Tavily-Api-Key"),
     qdrant_url: str = Header("", alias="X-Runtime-Qdrant-Url"),
     qdrant_api_key: str = Header("", alias="X-Runtime-Qdrant-Api-Key"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    require_rag_runtime()
+    collection = _chat_collection(db, current_user, request)
+    require_render_free_openai(
+        openai_api_key,
+        (collection.embedding_provider or "") if collection is not None else "",
+    )
 
     from app.services.rag_runtime import ask_session
     from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
@@ -149,8 +201,9 @@ def chat(
     )
     _require_session_access(db, current_user, request.session_id)
     _require_collection_access(db, current_user, request.collection_name)
-    _log_collection_context(request)
     credentials = _runtime_credentials(request, openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
+    _ensure_render_free_openai_session(request, credentials, collection)
+    _log_collection_context(request)
     _log_llm_selection(credentials)
     try:
         with qdrant_runtime_credentials(
@@ -168,7 +221,7 @@ def chat(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
-        if credentials.should_fallback_to_local(exc):
+        if not get_settings().render_free_mvp and credentials.should_fallback_to_local(exc):
             fallback_credentials = credentials.as_local_stub()
             with qdrant_runtime_credentials(
                 fallback_credentials.effective_qdrant_url,
@@ -190,7 +243,7 @@ def chat(
         else:
             raise HTTPException(status_code=400, detail=credentials.redact(exc)) from exc
     except Exception as exc:
-        if credentials.should_fallback_to_local(exc):
+        if not get_settings().render_free_mvp and credentials.should_fallback_to_local(exc):
             fallback_credentials = credentials.as_local_stub()
             with qdrant_runtime_credentials(
                 fallback_credentials.effective_qdrant_url,
@@ -241,19 +294,24 @@ def chat(
 @router.post("/stream", dependencies=[Depends(require_api_key)])
 def chat_stream(
     request: ChatRequest,
-    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Api-Key"),
+    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Key"),
     tavily_api_key: str = Header("", alias="X-Runtime-Tavily-Api-Key"),
     qdrant_url: str = Header("", alias="X-Runtime-Qdrant-Url"),
     qdrant_api_key: str = Header("", alias="X-Runtime-Qdrant-Api-Key"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    require_rag_runtime()
+    collection = _chat_collection(db, current_user, request)
+    require_render_free_openai(
+        openai_api_key,
+        (collection.embedding_provider or "") if collection is not None else "",
+    )
 
     _require_session_access(db, current_user, request.session_id)
     _require_collection_access(db, current_user, request.collection_name)
-    _log_collection_context(request)
     credentials = _runtime_credentials(request, openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
+    _ensure_render_free_openai_session(request, credentials, collection)
+    _log_collection_context(request)
     _log_llm_selection(credentials)
     return StreamingResponse(
         _stream_with_credentials(request, credentials),

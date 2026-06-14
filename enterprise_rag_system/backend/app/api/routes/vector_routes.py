@@ -33,7 +33,7 @@ def provider_info():
 @router.post("/vector/search", dependencies=[Depends(require_api_key), Depends(get_current_user)])
 def vector_search(
     request: VectorSearchRequest,
-    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Api-Key"),
+    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Key"),
     tavily_api_key: str = Header("", alias="X-Runtime-Tavily-Api-Key"),
     qdrant_url: str = Header("", alias="X-Runtime-Qdrant-Url"),
     qdrant_api_key: str = Header("", alias="X-Runtime-Qdrant-Api-Key"),

@@ -1,15 +1,45 @@
 import re
 import logging
 from collections import Counter
+from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
+from app.core.config import get_settings
 from app.core.constants import CHAT_MODEL
+from app.core.rag_mode import MISSING_RUNTIME_OPENAI_KEY_MESSAGE
 from app.core.runtime_credentials import RuntimeCredentials
 
 
 logger = logging.getLogger(__name__)
+
+
+class OpenAIChatModelLite:
+    def __init__(self, api_key: str, model: str, streaming: bool):
+        from openai import OpenAI
+
+        self._client = OpenAI(api_key=api_key)
+        self._model = model
+        self._streaming = streaming
+
+    def invoke(self, prompt: str):
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=[{"role": "user", "content": str(prompt)}],
+            temperature=0,
+        )
+        return SimpleNamespace(content=response.choices[0].message.content or "")
+
+    def stream(self, prompt: str):
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=[{"role": "user", "content": str(prompt)}],
+            temperature=0,
+            stream=True,
+        )
+        for chunk in response:
+            yield SimpleNamespace(content=chunk.choices[0].delta.content or "")
 
 
 _STOP_WORDS = {
@@ -115,7 +145,15 @@ def get_chat_model(streaming: bool = True, credentials: RuntimeCredentials | Non
         credentials.llm_provider == "local_stub",
     )
     if credentials.llm_provider == "local_stub":
+        if get_settings().render_free_mvp:
+            raise ValueError(MISSING_RUNTIME_OPENAI_KEY_MESSAGE)
         return RunnableLambda(_local_stub_response)
+    if get_settings().render_free_mvp:
+        return OpenAIChatModelLite(
+            api_key=credentials.require_openai_api_key(),
+            model=CHAT_MODEL,
+            streaming=streaming,
+        )
     from langchain_openai import ChatOpenAI
 
     return ChatOpenAI(

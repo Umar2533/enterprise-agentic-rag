@@ -122,6 +122,20 @@ def user_owns_session(db: Session, user_id: int, session_id: str) -> bool:
     return db.execute(stmt).first() is not None
 
 
+def get_user_collection_by_session(
+    db: Session,
+    session_id: str,
+    user_id: int | None = None,
+) -> UserCollection | None:
+    stmt = select(UserCollection).where(
+        UserCollection.session_id == session_id,
+        UserCollection.is_active.is_(True),
+    )
+    if user_id is not None:
+        stmt = stmt.where(UserCollection.user_id == user_id)
+    return db.execute(stmt).scalars().first()
+
+
 def update_user_collection_session(
     db: Session,
     user_collection_id: int,

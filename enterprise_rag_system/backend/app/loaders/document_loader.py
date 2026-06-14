@@ -2,8 +2,9 @@ import csv
 from pathlib import Path
 from typing import List
 
-from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader, TextLoader
 from langchain_core.documents import Document
+
+from app.core.config import get_settings
 
 
 def _csv_to_markdown(path: Path) -> str:
@@ -29,6 +30,38 @@ def _csv_to_markdown(path: Path) -> str:
 def load_document(path: str) -> List[Document]:
     file_path = Path(path)
     ext = file_path.suffix.lower()
+
+    if get_settings().render_free_mvp:
+        if ext == ".pdf":
+            from pypdf import PdfReader
+
+            reader = PdfReader(str(file_path))
+            return [
+                Document(
+                    page_content=page.extract_text() or "",
+                    metadata={"source": str(file_path), "page": page_number},
+                )
+                for page_number, page in enumerate(reader.pages)
+            ]
+        if ext in {".docx", ".doc"}:
+            import docx2txt
+
+            return [
+                Document(
+                    page_content=docx2txt.process(str(file_path)) or "",
+                    metadata={"source": str(file_path)},
+                )
+            ]
+        if ext == ".csv":
+            return [Document(page_content=_csv_to_markdown(file_path), metadata={"source": str(file_path)})]
+        return [
+            Document(
+                page_content=file_path.read_text(encoding="utf-8"),
+                metadata={"source": str(file_path)},
+            )
+        ]
+
+    from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader, TextLoader
 
     if ext == ".pdf":
         return PyPDFLoader(str(file_path)).load()

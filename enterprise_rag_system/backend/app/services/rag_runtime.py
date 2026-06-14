@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 from typing import Dict, Generator, List
 
 from langchain_core.documents import Document
-from langchain_core.prompts import ChatPromptTemplate
 
 from app.core.constants import DEFAULT_COLLECTION, DEFAULT_MAX_ITERATIONS
+from app.core.config import get_settings
 from app.core.prompts import COLLECTION_RELEVANCE_PROMPT, EVALUATE_PROMPT, GENERATE_PROMPT
 from app.core.runtime_credentials import RuntimeCredentials
 from app.services.ingestion.pipeline import load_and_chunk_document
@@ -49,6 +49,15 @@ class RagSession:
 
 _SESSIONS: Dict[str, RagSession] = {}
 logger = logging.getLogger(__name__)
+
+
+def _format_prompt(template: str, **values):
+    if get_settings().render_free_mvp:
+        return template.format(**values)
+
+    from langchain_core.prompts import ChatPromptTemplate
+
+    return ChatPromptTemplate.from_template(template).format_messages(**values)
 
 
 def register_session(session: RagSession) -> None:
@@ -325,11 +334,12 @@ def _is_collection_related(
         return True
     try:
         llm = get_chat_model(streaming=False, credentials=credentials)
-        result = (ChatPromptTemplate.from_template(COLLECTION_RELEVANCE_PROMPT) | llm).invoke(
-            {
-                "question": question,
-                "context": context,
-            }
+        result = llm.invoke(
+            _format_prompt(
+                COLLECTION_RELEVANCE_PROMPT,
+                question=question,
+                context=context,
+            )
         ).content
         normalized = result.strip().lower()
         return normalized.startswith("related") and not normalized.startswith("unrelated")
@@ -705,12 +715,13 @@ def _evaluate_answer(
         return "good"
     try:
         llm = get_chat_model(streaming=False, credentials=credentials)
-        result = (ChatPromptTemplate.from_template(EVALUATE_PROMPT) | llm).invoke(
-            {
-                "question": question,
-                "context": build_context(context_documents or []),
-                "answer": answer,
-            }
+        result = llm.invoke(
+            _format_prompt(
+                EVALUATE_PROMPT,
+                question=question,
+                context=build_context(context_documents or []),
+                answer=answer,
+            )
         ).content
         lowered_result = result.strip().lower()
         return "good" if "good" in lowered_result and "not_good" not in lowered_result else "not_good"
@@ -727,8 +738,8 @@ def _generate_answer(
     credentials: RuntimeCredentials | None = None,
 ):
     llm = get_chat_model(streaming=streaming, credentials=credentials)
-    prompt = ChatPromptTemplate.from_template(GENERATE_PROMPT)
-    messages = prompt.format_messages(
+    messages = _format_prompt(
+        GENERATE_PROMPT,
         context=build_context(context_documents),
         question=question,
         confidence_level=confidence_level,
@@ -1181,7 +1192,9 @@ def stream_session_answer(
         )
         yield _sse("trace", fallback_trace)
         try:
-            fallback_credentials = credentials.as_local_stub() if credentials.should_fallback_to_local(exc) else credentials
+            fallback_credentials = credentials
+            if not get_settings().render_free_mvp and credentials.should_fallback_to_local(exc):
+                fallback_credentials = credentials.as_local_stub()
             result = ask_session(
                 session_id,
                 question,

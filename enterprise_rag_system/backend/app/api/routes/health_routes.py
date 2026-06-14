@@ -9,7 +9,7 @@ router = APIRouter(prefix="/health", tags=["health"])
 
 @router.get("")
 def health_check(
-    runtime_openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Api-Key"),
+    runtime_openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Key"),
     use_openai: str = Header("", alias="X-Use-OpenAI"),
     force_local_stub: str = Header("", alias="X-Force-Local-Stub"),
 ):

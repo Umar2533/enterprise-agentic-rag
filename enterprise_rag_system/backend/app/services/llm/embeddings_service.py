@@ -1,4 +1,7 @@
 from functools import lru_cache
+from typing import Iterable
+
+from langchain_core.embeddings import Embeddings
 
 from app.core.constants import (
     DEFAULT_EMBEDDING_PROVIDER,
@@ -6,11 +9,30 @@ from app.core.constants import (
     OPENAI_EMBEDDING_MODEL,
     SUPPORTED_EMBEDDING_PROVIDERS,
 )
+from app.core.config import get_settings
 from app.core.runtime_credentials import RuntimeCredentials
 
 
 class UnsupportedEmbeddingProviderError(ValueError):
     pass
+
+
+class OpenAIEmbeddingsLite(Embeddings):
+    def __init__(self, api_key: str, model: str):
+        from openai import OpenAI
+
+        self._client = OpenAI(api_key=api_key)
+        self._model = model
+
+    def embed_documents(self, texts: Iterable[str]) -> list[list[float]]:
+        response = self._client.embeddings.create(
+            model=self._model,
+            input=list(texts),
+        )
+        return [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_documents([text])[0]
 
 
 def normalize_embedding_provider(provider: str | None) -> str:
@@ -45,11 +67,20 @@ def get_embeddings(
 ):
     provider = normalize_embedding_provider(provider)
     if provider == DEFAULT_EMBEDDING_PROVIDER:
+        if get_settings().render_free_mvp:
+            raise UnsupportedEmbeddingProviderError(
+                "HuggingFace embeddings are disabled on Render Free."
+            )
         return _huggingface_embeddings()
     if provider == "openai":
+        credentials = credentials or RuntimeCredentials()
+        if get_settings().render_free_mvp:
+            return OpenAIEmbeddingsLite(
+                api_key=credentials.require_openai_api_key(),
+                model=OPENAI_EMBEDDING_MODEL,
+            )
         from langchain_openai import OpenAIEmbeddings
 
-        credentials = credentials or RuntimeCredentials()
         return OpenAIEmbeddings(
             api_key=credentials.require_openai_api_key(),
             model=OPENAI_EMBEDDING_MODEL,

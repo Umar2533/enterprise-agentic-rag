@@ -114,7 +114,7 @@ def _collection_item(
 @router.get("", dependencies=[Depends(require_api_key)])
 @router.get("/list", dependencies=[Depends(require_api_key)])
 def list_collections(
-    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Api-Key"),
+    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Key"),
     tavily_api_key: str = Header("", alias="X-Runtime-Tavily-Api-Key"),
     qdrant_url: str = Header("", alias="X-Runtime-Qdrant-Url"),
     qdrant_api_key: str = Header("", alias="X-Runtime-Qdrant-Api-Key"),
@@ -165,7 +165,7 @@ def list_collections(
 @router.post("/select", dependencies=[Depends(require_api_key)])
 def select_collection(
     request: SelectCollectionRequest,
-    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Api-Key"),
+    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Key"),
     tavily_api_key: str = Header("", alias="X-Runtime-Tavily-Api-Key"),
     qdrant_url: str = Header("", alias="X-Runtime-Qdrant-Url"),
     qdrant_api_key: str = Header("", alias="X-Runtime-Qdrant-Api-Key"),
@@ -322,7 +322,7 @@ def collection_build_summary(
 @router.post("/bm25/rebuild/{collection_name}", dependencies=[Depends(require_api_key), Depends(get_current_user)])
 def rebuild_collection_bm25(
     collection_name: str,
-    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Api-Key"),
+    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Key"),
     tavily_api_key: str = Header("", alias="X-Runtime-Tavily-Api-Key"),
     qdrant_url: str = Header("", alias="X-Runtime-Qdrant-Url"),
     qdrant_api_key: str = Header("", alias="X-Runtime-Qdrant-Api-Key"),
@@ -380,7 +380,7 @@ def collection_memory(
 @router.delete("/delete/{session_id}", dependencies=[Depends(require_api_key)])
 def delete_collection(
     session_id: str,
-    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Api-Key"),
+    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Key"),
     tavily_api_key: str = Header("", alias="X-Runtime-Tavily-Api-Key"),
     qdrant_url: str = Header("", alias="X-Runtime-Qdrant-Url"),
     qdrant_api_key: str = Header("", alias="X-Runtime-Qdrant-Api-Key"),
@@ -420,7 +420,7 @@ def delete_collection(
 @router.delete("/delete/by-name/{collection_name}", dependencies=[Depends(require_api_key)])
 def delete_collection_by_name(
     collection_name: str,
-    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Api-Key"),
+    openai_api_key: str = Header("", alias="X-Runtime-OpenAI-Key"),
     tavily_api_key: str = Header("", alias="X-Runtime-Tavily-Api-Key"),
     qdrant_url: str = Header("", alias="X-Runtime-Qdrant-Url"),
     qdrant_api_key: str = Header("", alias="X-Runtime-Qdrant-Api-Key"),
