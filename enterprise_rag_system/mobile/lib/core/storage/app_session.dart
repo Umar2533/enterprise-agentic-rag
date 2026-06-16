@@ -17,6 +17,7 @@ class AppSession extends ChangeNotifier {
   static const _jwtTokenKey = 'jwt_token';
   static const _apiKeyKey = 'api_key';
   static const _openAiApiKeyKey = 'openai_api_key';
+  static const _tavilyApiKeyKey = 'tavily_api_key';
 
   String backendUrl = ApiConstants.defaultBaseUrl;
   String sessionId = '';
@@ -27,9 +28,11 @@ class AppSession extends ChangeNotifier {
   String? jwtToken;
   String? apiKey;
   String? openAiApiKey;
+  String? tavilyApiKey;
 
   bool get hasSession => sessionId.trim().isNotEmpty;
   bool get hasCollection => collectionName.trim().isNotEmpty;
+  bool get hasActiveOpenAiKey => (openAiApiKey?.trim() ?? '').isNotEmpty;
 
   Map<String, String> get headers {
     final headersMap = <String, String>{};
@@ -44,6 +47,10 @@ class AppSession extends ChangeNotifier {
     final openAiKey = openAiApiKey?.trim() ?? '';
     if (openAiKey.isNotEmpty) {
       headersMap['X-Runtime-OpenAI-Key'] = openAiKey;
+    }
+    final tavilyKey = tavilyApiKey?.trim() ?? '';
+    if (tavilyKey.isNotEmpty) {
+      headersMap['X-Runtime-Tavily-Api-Key'] = tavilyKey;
     }
     return headersMap;
   }
@@ -67,6 +74,7 @@ class AppSession extends ChangeNotifier {
     jwtToken = data[_jwtTokenKey]?.toString();
     apiKey = data[_apiKeyKey]?.toString();
     openAiApiKey = data[_openAiApiKeyKey]?.toString();
+    tavilyApiKey = data[_tavilyApiKeyKey]?.toString();
     notifyListeners();
   }
 
@@ -129,6 +137,17 @@ class AppSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setTavilyApiKey(String? value) async {
+    tavilyApiKey = value?.trim();
+    if (tavilyApiKey == null || tavilyApiKey!.isEmpty) {
+      tavilyApiKey = null;
+      await _removeValues([_tavilyApiKeyKey]);
+    } else {
+      await _saveValue(_tavilyApiKeyKey, tavilyApiKey!);
+    }
+    notifyListeners();
+  }
+
   Future<void> activateSession({
     required String sessionId,
     required String collectionName,
@@ -161,6 +180,7 @@ class AppSession extends ChangeNotifier {
     jwtToken = null;
     apiKey = null;
     openAiApiKey = null;
+    tavilyApiKey = null;
     notifyListeners();
   }
 

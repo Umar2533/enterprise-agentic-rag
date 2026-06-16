@@ -22,6 +22,10 @@ RESET_MESSAGE_KEY = "runtime_secret_reset_message"
 USE_OPENAI_KEY = "runtime_use_openai"
 LLM_FALLBACK_WARNING_KEY = "llm_fallback_warning"
 FORCE_LOCAL_STUB_KEY = "runtime_force_local_stub"
+OPENAI_QUOTA_MESSAGE = (
+    "Your OpenAI API key has no available quota. Please add billing/credits "
+    "in OpenAI Platform or use another key."
+)
 
 
 def init_runtime_secret_state() -> None:
@@ -364,18 +368,24 @@ def render_runtime_credential_gate(location: str = "workspace") -> None:
 def _render_runtime_key_form(location: str) -> bool:
     with st.form(f"runtime_api_key_setup_{location}"):
         st.checkbox("Use OpenAI for this session", key=USE_OPENAI_KEY)
-        st.caption("Optional. Add your OpenAI key for better answers. Leave empty to use local test mode.")
+        st.caption("Required for Upload + Chat.")
         cols = st.columns(2)
         with cols[0]:
             _runtime_text_input(
                 "OPENAI_API_KEY",
-                "OpenAI API key",
-                "Optional in local test mode",
+                "OpenAI API Key - Required for Upload + Chat",
+                "sk-...",
                 password=True,
                 optional=local_test_mode_active(),
             )
         with cols[1]:
-            _runtime_text_input("TAVILY_API_KEY", "Tavily API key", "tvly-...", password=True, optional=True)
+            _runtime_text_input(
+                "TAVILY_API_KEY",
+                "Tavily API Key - Optional for Web Search",
+                "tvly-...",
+                password=True,
+                optional=True,
+            )
         submitted = st.form_submit_button("Validate & Continue", type="primary", width="stretch")
 
     if submitted:
@@ -430,7 +440,7 @@ def _runtime_text_input(
         help="Stored only in Streamlit session and sent per request.",
     )
     if name == "OPENAI_API_KEY":
-        st.caption("Optional. Add your OpenAI key for better answers. Leave empty to use local test mode.")
+        st.caption("Required for Upload + Chat.")
 
 
 def clear_runtime_key_state() -> None:
@@ -554,17 +564,17 @@ def render_api_key_setup_panel(location: str = "main") -> bool:
         cols = st.columns(2)
         with cols[0]:
             st.text_input(
-                "OPENAI_API_KEY (Optional in local test mode)" if local_test_mode_active() else "OPENAI_API_KEY",
+                "OpenAI API Key - Required for Upload + Chat",
                 type="password",
                 key="setup_input_OPENAI_API_KEY",
                 placeholder="sk-...",
                 disabled=False,
-                help="Optional in local test mode. Used for OpenAI chat generation and OpenAI embeddings when configured.",
+                help="Required for document upload and chat in OpenAI BYOK mode.",
             )
-            st.caption("Optional. Add your OpenAI key for better answers. Leave empty to use local test mode.")
+            st.caption("Required for Upload + Chat.")
         with cols[1]:
             st.text_input(
-                "TAVILY_API_KEY (optional)",
+                "Tavily API Key - Optional for Web Search",
                 type="password",
                 key="setup_input_TAVILY_API_KEY",
                 placeholder="tvly-...",
@@ -604,22 +614,37 @@ def render_compact_api_status() -> None:
     llm_provider = str(server_state.get("effective_llm_provider") or server_state.get("llm_provider") or "unknown")
     llm_model = str(server_state.get("llm_model") or "unknown")
     use_openai = bool(st.session_state.get(USE_OPENAI_KEY))
-    runtime_openai_key = bool(get_secret_value("OPENAI_API_KEY"))
     fallback_warning = str(st.session_state.get(LLM_FALLBACK_WARNING_KEY) or "") if use_openai else ""
     if local_test_mode_active():
         st.markdown(
             '<div class="runtime-mode-chip">Local test mode active &mdash; OpenAI optional</div>',
             unsafe_allow_html=True,
         )
+    quota_error = OPENAI_QUOTA_MESSAGE in fallback_warning
+    runtime_openai_active = bool(get_secret_value("OPENAI_API_KEY"))
     groups = {
-        "OpenAI": status["OPENAI_API_KEY"],
-        "Tavily": status["TAVILY_API_KEY"],
-        "Qdrant": {
-            "configured": bool(server_state.get("qdrant_configured")),
-            "source": "backend" if server_state.get("qdrant_configured") else "missing",
-            "masked": "Configured on backend" if server_state.get("qdrant_configured") else "Missing",
+        "OpenAI API Key - Required for Upload + Chat": {
+            **status["OPENAI_API_KEY"],
+            "state": (
+                "Quota Error"
+                if quota_error
+                else "Runtime Key Active"
+                if runtime_openai_active
+                else "Missing"
+            ),
+        },
+        "Tavily API Key - Optional for Web Search": {
+            **status["TAVILY_API_KEY"],
+            "state": "Active" if status["TAVILY_API_KEY"]["configured"] else "Optional",
         },
     }
+    if get_secret_value("BACKEND_API_KEY"):
+        groups["Backend API Key - Optional / Advanced"] = {
+            "configured": True,
+            "source": get_key_source("BACKEND_API_KEY"),
+            "masked": mask_secret(get_secret_value("BACKEND_API_KEY")),
+            "state": "Active",
+        }
     st.markdown('<div class="sidebar-status-card"><strong>API Status</strong>', unsafe_allow_html=True)
     st.markdown(
         f"""
@@ -635,18 +660,8 @@ def render_compact_api_status() -> None:
         unsafe_allow_html=True,
     )
     for label, item in groups.items():
-        optional_local_openai = label == "OpenAI" and local_test_mode_active()
-        runtime_openai_active = label == "OpenAI" and use_openai and runtime_openai_key
-        if label == "OpenAI" and runtime_openai_active:
-            state = "Runtime key active"
-            css = "api-ok"
-        elif label == "OpenAI" and not use_openai:
-            server_default_openai = bool(server_state.get("openai_configured")) and llm_provider.lower() == "openai"
-            state = "Server default" if server_default_openai else ("Inactive" if optional_local_openai else "Disabled")
-            css = "api-ok" if server_default_openai or optional_local_openai else "api-missing"
-        else:
-            state = "Optional" if optional_local_openai else ("Connected" if item["configured"] else "Missing")
-            css = "api-ok" if item["configured"] or optional_local_openai else "api-missing"
+        state = item["state"]
+        css = "api-missing" if state in {"Missing", "Quota Error"} else "api-ok"
         st.markdown(
             f"""
             <div class="api-status-row">
@@ -665,11 +680,11 @@ def render_openai_session_controls() -> None:
     st.toggle("Use OpenAI for this session", key=USE_OPENAI_KEY)
     if st.session_state.get(USE_OPENAI_KEY):
         st.text_input(
-            "OpenAI runtime key",
+            "OpenAI API Key - Required for Upload + Chat",
             type="password",
             key="sidebar_runtime_openai_input",
             placeholder="sk-...",
-            help="Optional. Add your OpenAI key for better answers. Leave empty to use local test mode.",
+            help="Required for document upload and chat in OpenAI BYOK mode.",
         )
         if st.button("Activate runtime key", key="sidebar_activate_openai", width="stretch"):
             key = str(st.session_state.get("sidebar_runtime_openai_input") or "").strip()
@@ -754,11 +769,16 @@ def _validate_openai_key(api_key: str) -> str:
     except requests.RequestException:
         return "Could not validate the OpenAI key. Try again or turn off OpenAI for this session."
     if response.status_code == 429:
-        return "OpenAI rate limit or quota error. Leave OpenAI off to use local test mode."
+        lowered = response.text.lower()
+        if "insufficient_quota" in lowered or "quota" in lowered:
+            st.session_state[LLM_FALLBACK_WARNING_KEY] = OPENAI_QUOTA_MESSAGE
+            return OPENAI_QUOTA_MESSAGE
+        return "OpenAI is temporarily rate limited. Please try again shortly."
     if response.status_code in {401, 403}:
         return "OpenAI rejected this API key."
     if not response.ok:
         return f"OpenAI validation failed with HTTP {response.status_code}."
+    st.session_state.pop(LLM_FALLBACK_WARNING_KEY, None)
     return ""
 
 

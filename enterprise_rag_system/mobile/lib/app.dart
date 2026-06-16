@@ -39,7 +39,7 @@ class _EnterpriseRagAppState extends State<EnterpriseRagApp> {
       listenable: _session,
       builder: (context, _) {
         return MaterialApp(
-          title: 'Enterprise Agentic RAG',
+          title: 'Enterprise RAG',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
@@ -95,41 +95,53 @@ class _AppShellState extends State<AppShell> {
       body: pages[_index],
       bottomNavigationBar: _index == _chatTabIndex
           ? null
-          : NavigationBar(
-              height: 64,
-              elevation: 1,
-              indicatorShape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
+          : SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 3, 8, 6),
+                child: NavigationBar(
+                  height: 66,
+                  elevation: 0,
+                  backgroundColor: Theme.of(context).cardColor,
+                  indicatorColor: Theme.of(
+                    context,
+                  ).colorScheme.primary.withValues(alpha: .12),
+                  indicatorShape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  labelBehavior:
+                      NavigationDestinationLabelBehavior.onlyShowSelected,
+                  selectedIndex: _index,
+                  onDestinationSelected: _setIndex,
+                  destinations: const [
+                    NavigationDestination(
+                      icon: Icon(Icons.dashboard_outlined),
+                      selectedIcon: Icon(Icons.dashboard_rounded),
+                      label: 'Home',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.folder_outlined),
+                      selectedIcon: Icon(Icons.folder_rounded),
+                      label: 'Knowledge',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.upload_file_outlined),
+                      selectedIcon: Icon(Icons.upload_file_rounded),
+                      label: 'Upload',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.chat_bubble_outline_rounded),
+                      selectedIcon: Icon(Icons.chat_bubble_rounded),
+                      label: 'Chat',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.settings_outlined),
+                      selectedIcon: Icon(Icons.settings_rounded),
+                      label: 'Settings',
+                    ),
+                  ],
+                ),
               ),
-              selectedIndex: _index,
-              onDestinationSelected: _setIndex,
-              destinations: const [
-                NavigationDestination(
-                  icon: Icon(Icons.dashboard_outlined),
-                  selectedIcon: Icon(Icons.dashboard_rounded),
-                  label: 'Home',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.folder_outlined),
-                  selectedIcon: Icon(Icons.folder_rounded),
-                  label: 'Knowledge',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.upload_file_outlined),
-                  selectedIcon: Icon(Icons.upload_file_rounded),
-                  label: 'Upload',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.chat_bubble_outline_rounded),
-                  selectedIcon: Icon(Icons.chat_bubble_rounded),
-                  label: 'Chat',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.settings_outlined),
-                  selectedIcon: Icon(Icons.settings_rounded),
-                  label: 'Settings',
-                ),
-              ],
             ),
     );
   }

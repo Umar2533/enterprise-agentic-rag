@@ -7,6 +7,11 @@ class ApiException implements Exception {
 
   @override
   String toString() {
+    if (message == 'Add your OpenAI API key in Settings to use this feature.' ||
+        message ==
+            'Your OpenAI API key has no available quota. Please add billing/credits in OpenAI Platform or use another key.') {
+      return message;
+    }
     if (statusCode == null) {
       return message;
     }

@@ -14,6 +14,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from components.runtime_secrets import (
+    LLM_FALLBACK_WARNING_KEY,
+    OPENAI_QUOTA_MESSAGE,
     clear_runtime_key_state,
     default_embedding_provider,
     get_secret_value,
@@ -277,7 +279,7 @@ def _request_once(
     except ValueError:
         detail = response.text
     raise ApiClientError(
-        str(detail),
+        _normalize_api_error(detail, response.status_code),
         status_code=response.status_code,
         exception_type="HTTPStatusError",
         elapsed_seconds=time.monotonic() - request_start,
@@ -785,7 +787,10 @@ def chat_stream(
             detail = response.json().get("detail", response.text)
         except ValueError:
             detail = response.text
-        raise ApiClientError(str(detail), status_code=response.status_code)
+        raise ApiClientError(
+            _normalize_api_error(detail, response.status_code),
+            status_code=response.status_code,
+        )
 
     event = None
     data_lines = []
@@ -797,6 +802,10 @@ def chat_stream(
             if not line:
                 if event and data_lines:
                     payload = json.loads("\n".join(data_lines))
+                    if event == "error" and isinstance(payload, dict):
+                        for key in ("detail", "error", "message"):
+                            if key in payload:
+                                payload[key] = _normalize_api_error(payload[key])
                     yield event, payload
                 event = None
                 data_lines = []
@@ -1021,6 +1030,20 @@ def _safe_fingerprint_value(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def _normalize_api_error(detail: object, status_code: int | None = None) -> str:
+    message = str(detail)
+    lowered = message.lower()
+    quota_error = "insufficient_quota" in lowered or (
+        status_code == 429 and "quota" in lowered
+    )
+    if quota_error:
+        st.session_state[LLM_FALLBACK_WARNING_KEY] = OPENAI_QUOTA_MESSAGE
+        return OPENAI_QUOTA_MESSAGE
+    if "<!doctype html" in lowered or "<html" in lowered:
+        return "Backend is temporarily unavailable. Please try again."
+    return message
 
 
 def _qdrant_headers() -> dict[str, str]:

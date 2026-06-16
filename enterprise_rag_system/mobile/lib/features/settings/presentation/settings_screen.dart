@@ -31,6 +31,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _jwtTokenController;
   late final TextEditingController _apiKeyController;
   late final TextEditingController _openAiApiKeyController;
+  late final TextEditingController _tavilyApiKeyController;
+  String? _credentialMessage;
   String? _loginMessage;
   bool _loggingIn = false;
   String? _signupMessage;
@@ -67,6 +69,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _openAiApiKeyController = TextEditingController(
       text: widget.session.openAiApiKey,
     );
+    _tavilyApiKeyController = TextEditingController(
+      text: widget.session.tavilyApiKey,
+    );
   }
 
   @override
@@ -84,6 +89,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _jwtTokenController.dispose();
     _apiKeyController.dispose();
     _openAiApiKeyController.dispose();
+    _tavilyApiKeyController.dispose();
     super.dispose();
   }
 
@@ -91,6 +97,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await widget.session.setJwtToken(_jwtTokenController.text);
     await widget.session.setApiKey(_apiKeyController.text);
     await widget.session.setOpenAiApiKey(_openAiApiKeyController.text);
+    await widget.session.setTavilyApiKey(_tavilyApiKeyController.text);
+    if (mounted) {
+      setState(() {
+        _credentialMessage = widget.session.hasActiveOpenAiKey
+            ? 'OpenAI Runtime Key Active'
+            : 'OpenAI Runtime Key Missing';
+      });
+    }
   }
 
   Future<void> _login() async {
@@ -996,7 +1010,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextField(
             controller: _apiKeyController,
             decoration: const InputDecoration(
-              labelText: 'API key',
+              labelText: 'Backend API Key (optional / advanced)',
               prefixIcon: Icon(Icons.key_rounded),
             ),
             obscureText: true,
@@ -1008,7 +1022,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextField(
             controller: _openAiApiKeyController,
             decoration: const InputDecoration(
-              labelText: 'OpenAI runtime key',
+              labelText: 'OpenAI API Key (required for Upload + Chat)',
               prefixIcon: Icon(Icons.auto_awesome_rounded),
             ),
             obscureText: true,
@@ -1016,6 +1030,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
             autocorrect: false,
             textInputAction: TextInputAction.done,
           ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: StatusBadge(
+              label: widget.session.hasActiveOpenAiKey
+                  ? 'OpenAI Runtime Key Active'
+                  : 'OpenAI Runtime Key Missing',
+              color: widget.session.hasActiveOpenAiKey
+                  ? const Color(0xFF15803D)
+                  : const Color(0xFFB45309),
+              icon: widget.session.hasActiveOpenAiKey
+                  ? Icons.check_circle_rounded
+                  : Icons.warning_amber_rounded,
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _tavilyApiKeyController,
+            decoration: const InputDecoration(
+              labelText: 'Tavily API Key (optional for Web Search)',
+              prefixIcon: Icon(Icons.travel_explore_rounded),
+            ),
+            obscureText: true,
+            enableSuggestions: false,
+            autocorrect: false,
+            textInputAction: TextInputAction.done,
+          ),
+          if (_credentialMessage != null) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(_credentialMessage!),
+            ),
+          ],
           const SizedBox(height: 14),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -1214,6 +1262,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         _jwtTokenController.clear();
                         _apiKeyController.clear();
                         _openAiApiKeyController.clear();
+                        _tavilyApiKeyController.clear();
                         setState(() {
                           _loginMessage = null;
                           _signupMessage = null;

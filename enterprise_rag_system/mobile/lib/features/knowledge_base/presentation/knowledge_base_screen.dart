@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/constants/api_constants.dart';
+import '../../../core/errors/api_exception.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/storage/app_session.dart';
 import '../../../features/chat/data/models/collection_summary.dart';
@@ -42,15 +43,45 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     );
   }
 
+  Map<String, String>? get _knowledgeHeaders {
+    final token = widget.session.jwtToken?.trim() ?? '';
+    if (token.isEmpty) {
+      return null;
+    }
+    final normalizedToken = token.toLowerCase().startsWith('bearer ')
+        ? token.substring(7).trim()
+        : token;
+    if (normalizedToken.isEmpty) {
+      return null;
+    }
+    return {
+      ...widget.session.requestHeaders,
+      'Authorization': 'Bearer $normalizedToken',
+    };
+  }
+
+  String _messageForError(Object error) {
+    if (error is ApiException && error.statusCode == 401) {
+      return 'Please log in again';
+    }
+    return error.toString();
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
       _error = null;
     });
+    final headers = _knowledgeHeaders;
+    if (headers == null) {
+      setState(() {
+        _error = 'Please log in again';
+        _loading = false;
+      });
+      return;
+    }
     try {
-      final collections = await _service.listCollections(
-        headers: widget.session.authHeaders,
-      );
+      final collections = await _service.listCollections(headers: headers);
       if (mounted) {
         setState(() {
           _collections = collections;
@@ -60,7 +91,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     } catch (error) {
       if (mounted) {
         setState(() {
-          _error = error.toString();
+          _error = _messageForError(error);
           _loading = false;
         });
       }
@@ -75,7 +106,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     try {
       final selected = await _service.selectCollection(
         collection,
-        headers: widget.session.authHeaders,
+        headers: _knowledgeHeaders,
       );
       await widget.session.activateSession(
         sessionId: selected.sessionId,
@@ -92,7 +123,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
       if (mounted) {
         setState(() {
           _selectingCollectionName = null;
-          _error = error.toString();
+          _error = _messageForError(error);
         });
       }
     }
@@ -140,7 +171,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     try {
       await _service.deleteCollectionByName(
         collection.collectionName,
-        headers: widget.session.authHeaders,
+        headers: _knowledgeHeaders,
       );
       final wasActive =
           collection.collectionName == widget.session.collectionName;
@@ -152,9 +183,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
       }
       setState(() {
         _collections = _collections
-            .where(
-              (item) => item.collectionName != collection.collectionName,
-            )
+            .where((item) => item.collectionName != collection.collectionName)
             .toList();
         _deletingCollectionName = null;
       });
@@ -165,7 +194,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
       if (mounted) {
         setState(() {
           _deletingCollectionName = null;
-          _error = error.toString();
+          _error = _messageForError(error);
         });
       }
     }
@@ -179,7 +208,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     try {
       final summary = await _service.getCollectionSummary(
         collection.collectionName,
-        headers: widget.session.authHeaders,
+        headers: _knowledgeHeaders,
       );
       if (!mounted) {
         return;
@@ -192,17 +221,15 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
-        builder: (sheetContext) => _CollectionDetailsSheet(
-          collection: collection,
-          summary: summary,
-        ),
+        builder: (sheetContext) =>
+            _CollectionDetailsSheet(collection: collection, summary: summary),
       );
     } catch (error) {
       if (mounted) {
         setState(() => _loadingDetailsCollectionName = null);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Unable to load details: $error')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_messageForError(error))));
       }
     }
   }
@@ -487,8 +514,7 @@ class _CollectionCard extends StatelessWidget {
               ),
               const SizedBox(width: 4),
               FilledButton.icon(
-                onPressed:
-                    disabled || selected || loading || deleting
+                onPressed: disabled || selected || loading || deleting
                     ? null
                     : onSelect,
                 icon: loading
@@ -566,9 +592,7 @@ class _CollectionDetailsSheet extends StatelessWidget {
                           children: [
                             Text(
                               'Collection',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleMedium
+                              style: Theme.of(context).textTheme.titleMedium
                                   ?.copyWith(fontWeight: FontWeight.w900),
                             ),
                             _DetailRow(

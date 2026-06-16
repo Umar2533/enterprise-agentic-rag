@@ -4,7 +4,11 @@ import streamlit as st
 
 from components.auth_panel import require_login
 from components.layout import init_session_state, load_styles
-from components.runtime_secrets import require_runtime_credentials
+from components.runtime_secrets import (
+    LLM_FALLBACK_WARNING_KEY,
+    OPENAI_QUOTA_MESSAGE,
+    get_secret_value,
+)
 from components.sidebar import render_sidebar
 from services.api_client import (
     ApiClientError,
@@ -68,11 +72,18 @@ def _load_collections() -> tuple[list[dict], str]:
 def _attach_collection(selected: dict) -> None:
     name = _collection_name(selected)
     display_name = _display_name(selected) or name
+    embedding_provider = str(selected.get("embedding_provider") or "").strip().lower()
+    if embedding_provider == "openai" and not get_secret_value("OPENAI_API_KEY"):
+        st.error("Add your OpenAI API key in Settings to use this feature.")
+        return
+    if OPENAI_QUOTA_MESSAGE in str(st.session_state.get(LLM_FALLBACK_WARNING_KEY) or ""):
+        st.error(OPENAI_QUOTA_MESSAGE)
+        return
     loader = _render_workspace_loader(persistent=True)
     try:
         attached = select_collection(
             name,
-            st.session_state.get("embedding_provider", "huggingface"),
+            embedding_provider or st.session_state.get("embedding_provider", "huggingface"),
         )
         session_id = attached.get("session_id")
         collection_name = attached.get("collection_name") or name
@@ -241,7 +252,6 @@ init_session_state()
 if not require_login("Collections management"):
     st.stop()
 
-require_runtime_credentials("collections")
 render_sidebar("Collections")
 st.markdown('<span class="rag-page-root collections-page-root"></span>', unsafe_allow_html=True)
 

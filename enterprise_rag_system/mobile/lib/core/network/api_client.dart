@@ -191,7 +191,7 @@ import '../errors/api_exception.dart';
 
 class ApiClient {
   ApiClient({http.Client? client, this.debugMode = true})
-      : _client = client ?? http.Client();
+    : _client = client ?? http.Client();
 
   final http.Client _client;
   final bool debugMode;
@@ -228,17 +228,10 @@ class ApiClient {
     _logRequest('POST', uri, body: encodedBody);
 
     try {
-      final mergedHeaders = {
-        'Content-Type': 'application/json',
-        ...?headers,
-      };
+      final mergedHeaders = {'Content-Type': 'application/json', ...?headers};
 
       final response = await _client
-          .post(
-            uri,
-            headers: mergedHeaders,
-            body: encodedBody,
-          )
+          .post(uri, headers: mergedHeaders, body: encodedBody)
           .timeout(_timeout);
 
       return _handleResponse(response);
@@ -331,7 +324,11 @@ class ApiClient {
 
     throw ApiException(
       statusCode: response.statusCode,
-      message: _extractErrorMessage(decoded, response.body),
+      message: _extractErrorMessage(
+        decoded,
+        response.body,
+        response.statusCode,
+      ),
       details: decoded,
     );
   }
@@ -348,7 +345,16 @@ class ApiClient {
     }
   }
 
-  String _extractErrorMessage(Object? decoded, String rawBody) {
+  String _extractErrorMessage(Object? decoded, String rawBody, int statusCode) {
+    final serialized = decoded == null ? rawBody : jsonEncode(decoded);
+    final lowered = serialized.toLowerCase();
+    if (lowered.contains('insufficient_quota') ||
+        (statusCode == 429 && lowered.contains('quota'))) {
+      return 'Your OpenAI API key has no available quota. Please add billing/credits in OpenAI Platform or use another key.';
+    }
+    if (lowered.contains('<!doctype html') || lowered.contains('<html')) {
+      return 'Backend is temporarily unavailable. Please try again.';
+    }
     if (decoded is Map<String, dynamic>) {
       final error = decoded['error'];
 

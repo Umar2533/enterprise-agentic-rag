@@ -5,6 +5,8 @@ import streamlit as st
 from components.auth_panel import is_authenticated, render_fullscreen_auth_gate
 from components.layout import init_session_state, load_styles, validate_build_settings
 from components.runtime_secrets import (
+    LLM_FALLBACK_WARNING_KEY,
+    OPENAI_QUOTA_MESSAGE,
     get_key_source,
     has_required_keys,
     maybe_request_key_reset,
@@ -211,7 +213,16 @@ def _render_embedding_settings() -> None:
 def _render_llm_settings() -> None:
     with st.container(border=True):
         st.markdown('<div class="section-title"><div><h3>LLM Provider Settings</h3><p>OpenAI is the configured generation provider.</p></div></div>', unsafe_allow_html=True)
-        _status_badge("OpenAI configured" if get_key_source("OPENAI_API_KEY") != "missing" else "OpenAI missing", get_key_source("OPENAI_API_KEY") != "missing")
+        quota_error = OPENAI_QUOTA_MESSAGE in str(st.session_state.get(LLM_FALLBACK_WARNING_KEY) or "")
+        if quota_error:
+            _status_badge("OpenAI Quota Error", False)
+            st.error(OPENAI_QUOTA_MESSAGE)
+        elif get_key_source("OPENAI_API_KEY") == "session":
+            _status_badge("OpenAI Runtime Key Active", True)
+        else:
+            _status_badge("OpenAI Runtime Key Missing", False)
+        st.caption("OpenAI API Key - Required for Upload + Chat")
+        st.caption("Tavily API Key - Optional for Web Search")
 
 
 def _render_chunking_settings() -> None:
@@ -258,13 +269,17 @@ def _render_api_configuration() -> None:
 def _render_key_sources() -> None:
     with st.container(border=True):
         st.markdown('<div class="section-title"><div><h3>Key Sources</h3><p>Secrets are masked and never displayed in full.</p></div></div>', unsafe_allow_html=True)
+        labels = {
+            "OPENAI_API_KEY": "OpenAI API Key - Required for Upload + Chat",
+            "TAVILY_API_KEY": "Tavily API Key - Optional for Web Search",
+        }
         for name, item in required_keys_status().items():
             source = item["source"]
             badge = "ok" if source != "missing" else "warn"
             st.markdown(
                 f"""
                 <div class="status-row">
-                  <span>{html.escape(name)}</span>
+                  <span>{html.escape(labels.get(name, name))}</span>
                   <strong><span class="mini-chip {badge}">{source}</span> {html.escape(item["masked"])}</strong>
                 </div>
                 """,
@@ -285,8 +300,8 @@ def _render_system_preferences(backend_health: dict) -> None:
         rows = [
             ("Backend", "Online" if backend_health.get("success") else "Offline"),
             ("Vector DB", backend_health.get("vector_db_provider") or "-"),
-            ("OpenAI key source", get_key_source("OPENAI_API_KEY")),
-            ("Tavily key source", get_key_source("TAVILY_API_KEY")),
+            ("OpenAI API Key - Required for Upload + Chat", get_key_source("OPENAI_API_KEY")),
+            ("Tavily API Key - Optional for Web Search", get_key_source("TAVILY_API_KEY")),
         ]
         for label, value in rows:
             st.markdown(
