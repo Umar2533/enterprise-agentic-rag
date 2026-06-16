@@ -7,10 +7,18 @@ from langchain_core.documents import Document
 
 from app.core.constants import DEFAULT_COLLECTION, DEFAULT_MAX_ITERATIONS
 from app.core.config import get_settings
-from app.core.prompts import COLLECTION_RELEVANCE_PROMPT, EVALUATE_PROMPT, GENERATE_PROMPT
+from app.core.prompts import (
+    COLLECTION_RELEVANCE_PROMPT,
+    EVALUATE_PROMPT,
+    GENERATE_PROMPT,
+)
 from app.core.runtime_credentials import RuntimeCredentials
 from app.services.ingestion.pipeline import load_and_chunk_document
-from app.services.llm.embeddings_service import normalize_embedding_provider
+from app.services.llm.embeddings_service import (
+    embedding_model_for_provider,
+    embedding_vector_size_for_provider,
+    normalize_embedding_provider,
+)
 from app.services.llm.generation_service import get_chat_model
 from app.services.memory.memory_store import append_memory
 from app.services.retrieval.bm25_store import (
@@ -36,6 +44,8 @@ class RagSession:
     collection_name: str
     filename: str
     embedding_provider: str
+    embedding_model: str
+    vector_size: int | None
     documents: List[Document]
     retrieval_mode: str
     build_documents: List[Document] = field(default_factory=list)
@@ -49,6 +59,7 @@ class RagSession:
 
 _SESSIONS: Dict[str, RagSession] = {}
 logger = logging.getLogger(__name__)
+UNSUPPORTED_ANSWER = "The document does not mention this."
 
 
 def _format_prompt(template: str, **values):
@@ -127,6 +138,8 @@ def resolve_chat_session(
             session_id=session_id,
             collection_name=requested_collection,
             embedding_provider=runtime_session.embedding_provider if runtime_session else "huggingface",
+            embedding_model=runtime_session.embedding_model if runtime_session else None,
+            vector_size=runtime_session.vector_size if runtime_session else None,
             credentials=credentials,
         )
         logger.info(
@@ -171,6 +184,8 @@ def create_rag_session(
     )
     if embedding_provider == "openai":
         credentials.require_openai_api_key()
+    embedding_model = embedding_model_for_provider(embedding_provider)
+    vector_size = embedding_vector_size_for_provider(embedding_provider, embedding_model)
 
     chunks = load_and_chunk_document(
         file_path=file_path,
@@ -178,6 +193,8 @@ def create_rag_session(
         chunk_overlap=chunk_overlap,
         collection_name=collection_name,
         embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        vector_size=vector_size,
     )
     vector_provider = get_vector_db()
     vectorstore = vector_provider.build_vectorstore(
@@ -185,16 +202,26 @@ def create_rag_session(
         collection_name=collection_name,
         embedding_provider=embedding_provider,
         credentials=credentials,
+        embedding_model=embedding_model,
     )
     indexed_chunks = _merge_documents(load_bm25_index(collection_name), chunks) if use_existing_collection else chunks
     save_bm25_index(collection_name, indexed_chunks)
     retriever = HybridRetriever(vectorstore, indexed_chunks, k=max(k, 5))
-    register_collection(collection_name, indexed_chunks, embedding_provider, source="runtime")
+    register_collection(
+        collection_name,
+        indexed_chunks,
+        embedding_provider,
+        source="runtime",
+        embedding_model=embedding_model,
+        vector_size=vector_size,
+    )
     session = RagSession(
         session_id=session_id,
         collection_name=collection_name,
         filename=filename,
         embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        vector_size=vector_size,
         documents=indexed_chunks,
         retrieval_mode=retriever.mode,
         build_documents=chunks,
@@ -212,21 +239,33 @@ def select_existing_collection(
     session_id: str,
     collection_name: str,
     embedding_provider: str = "huggingface",
+    embedding_model: str | None = None,
+    vector_size: int | None = None,
     credentials: RuntimeCredentials | None = None,
 ) -> RagSession:
     credentials = credentials or RuntimeCredentials()
     collection_name = (collection_name or "").strip() or _resolve_collection_name("")
     embedding_provider = normalize_embedding_provider(embedding_provider)
+    embedding_model = embedding_model_for_provider(embedding_provider, embedding_model)
+    vector_size = vector_size or embedding_vector_size_for_provider(embedding_provider, embedding_model)
     logger.info(
-        "Selecting collection session_id=%s collection=%s embedding_provider=%s",
+        "Selecting collection session_id=%s collection=%s embedding_provider=%s embedding_model=%s vector_size=%s",
         session_id,
         collection_name,
         embedding_provider,
+        embedding_model,
+        vector_size,
     )
     vector_provider = get_vector_db()
     if not hasattr(vector_provider, "existing_vectorstore"):
         raise ValueError("Current vector DB provider cannot attach existing collections.")
-    vectorstore = vector_provider.existing_vectorstore(collection_name, embedding_provider, credentials)
+    vectorstore = vector_provider.existing_vectorstore(
+        collection_name,
+        embedding_provider,
+        credentials,
+        embedding_model=embedding_model,
+        vector_size=vector_size,
+    )
     documents = load_bm25_index(collection_name)
     retrieval_warning = ""
     if not documents:
@@ -240,6 +279,8 @@ def select_existing_collection(
         collection_name=collection_name,
         filename="existing_qdrant_collection",
         embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        vector_size=vector_size,
         documents=documents,
         retrieval_mode=retriever.mode,
         k=5,
@@ -261,6 +302,8 @@ def _build_session_retriever(
         session.collection_name,
         session.embedding_provider,
         credentials or RuntimeCredentials(),
+        embedding_model=session.embedding_model,
+        vector_size=session.vector_size,
     )
     return HybridRetriever(vectorstore, session.documents, k=session.k)
 
@@ -296,6 +339,44 @@ def _web_documents(web_sources: List[dict]) -> List[Document]:
     return documents
 
 
+def _has_useful_web_documents(web_documents: List[Document]) -> bool:
+    for document in web_documents or []:
+        content = re.sub(r"\s+", " ", getattr(document, "page_content", "")).strip()
+        if len(content) >= 40:
+            return True
+    return False
+
+
+def _extractive_web_answer(web_documents: List[Document]) -> str:
+    snippets = []
+    seen = set()
+    for document in web_documents or []:
+        content = re.sub(r"\s+", " ", getattr(document, "page_content", "")).strip()
+        if len(content) < 40:
+            continue
+        key = content[:120].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        snippets.append(content[:450].rstrip())
+        if len(snippets) >= 3:
+            break
+    if not snippets:
+        return UNSUPPORTED_ANSWER
+    return "Based on web search:\n" + "\n\n".join(snippets)
+
+
+def _ensure_web_answer(answer: str, web_documents: List[Document]) -> str:
+    if not _has_useful_web_documents(web_documents):
+        return answer
+    cleaned = (answer or "").strip()
+    if not cleaned or cleaned == UNSUPPORTED_ANSWER:
+        return _extractive_web_answer(web_documents)
+    if cleaned.startswith("Based on web search:"):
+        return cleaned
+    return f"Based on web search:\n{cleaned}"
+
+
 def _run_web_fallback(
     question: str,
     trace: List[dict],
@@ -318,6 +399,244 @@ def _run_web_fallback(
 def _web_search_configured(credentials: RuntimeCredentials | None = None) -> bool:
     credentials = credentials or RuntimeCredentials()
     return bool(credentials.effective_tavily_api_key)
+
+
+def _effective_answer_length(question: str, requested: str) -> str:
+    normalized = question.lower()
+    exact_limit = re.search(r"\b(?:max(?:imum)?|under|within|limit(?:ed)? to)\s+(\d{1,4})\s+words?\b", normalized)
+    if exact_limit:
+        return f"Strict maximum {exact_limit.group(1)} words."
+    if any(term in normalized for term in ("one line", "one-line", "brief", "short", "shortly", "concise")):
+        return "Very short: 1-3 sentences, maximum 60 words."
+    if any(term in normalized for term in ("detail", "detailed", "explain fully", "full explanation", "in depth", "in-depth")):
+        return "Detailed only if supported by context; stay concise and avoid repetition."
+    if _is_comparison_intent(question):
+        return "Concise markdown table plus at most 2 short notes."
+    if _is_visualization_intent(question):
+        return "Compact structured response only; do not invent values."
+    return "Short: 80-120 words maximum."
+
+
+def _language_instruction(question: str) -> str:
+    if re.search(r"[\u0600-\u06ff]", question):
+        return "The latest question is Urdu. Answer in Urdu only."
+
+    normalized = _normalize_scope_text(question)
+    roman_urdu_terms = {
+        "ap",
+        "bana",
+        "banao",
+        "bata",
+        "batao",
+        "btao",
+        "hai",
+        "hain",
+        "kar",
+        "karo",
+        "kia",
+        "kis",
+        "kya",
+        "mein",
+        "mujhe",
+        "nahi",
+    }
+    words = set(normalized.split())
+    if len(words & roman_urdu_terms) >= 2:
+        return "The latest question is Roman Urdu. Answer in Roman Urdu only."
+    return "The latest question is English. Answer in English only."
+
+
+def _requested_word_limit(question: str) -> int:
+    normalized = question.lower()
+    exact_limit = re.search(r"\b(?:max(?:imum)?|under|within|limit(?:ed)? to)\s+(\d{1,4})\s+words?\b", normalized)
+    if exact_limit:
+        return max(1, int(exact_limit.group(1)))
+    if any(term in normalized for term in ("one line", "one-line")):
+        return 30
+    if any(term in normalized for term in ("brief", "short", "shortly", "concise")):
+        return 60
+    if any(term in normalized for term in ("detail", "detailed", "explain fully", "full explanation", "in depth", "in-depth")):
+        return 350
+    if _is_comparison_intent(question) or _is_visualization_intent(question):
+        return 220
+    return 120
+
+
+def _is_comparison_intent(question: str) -> bool:
+    normalized = _normalize_scope_text(question)
+    comparison_terms = (
+        "compare",
+        "comparison",
+        "difference",
+        "differences",
+        "versus",
+        "vs",
+        "table",
+        "table bana do",
+        "make table",
+    )
+    return any(term in normalized for term in comparison_terms)
+
+
+def _is_visualization_intent(question: str) -> bool:
+    normalized = _normalize_scope_text(question)
+    visualization_terms = (
+        "bar chart",
+        "chart",
+        "graph",
+        "line chart",
+        "pie chart",
+        "plot",
+        "visualization",
+        "visualize",
+    )
+    return any(term in normalized for term in visualization_terms)
+
+
+def _is_structured_answer(answer: str) -> bool:
+    if "```" in answer:
+        return True
+    return any(
+        line.lstrip().startswith(("|", "- ", "* "))
+        for line in answer.splitlines()
+    )
+
+
+def _dedupe_repeated_sentences(answer: str) -> str:
+    lines = []
+    seen_lines = set()
+    for line in answer.splitlines():
+        key = line.strip().lower()
+        if key and not key.startswith("|") and key in seen_lines:
+            continue
+        if key and not key.startswith("|"):
+            seen_lines.add(key)
+        lines.append(line)
+    answer = "\n".join(lines).strip()
+    if _is_structured_answer(answer):
+        return answer
+
+    parts = re.split(r"(?<=[.!?])\s+", answer)
+    seen_sentences = set()
+    deduped = []
+    for part in parts:
+        key = re.sub(r"\s+", " ", part.strip().lower())
+        if not key or key in seen_sentences:
+            continue
+        seen_sentences.add(key)
+        deduped.append(part.strip())
+    return " ".join(deduped).strip()
+
+
+def _context_text(context_documents) -> str:
+    parts = []
+    for item in context_documents or []:
+        doc = item.document if hasattr(item, "document") else item
+        parts.append(getattr(doc, "page_content", str(doc)))
+    return "\n".join(parts).lower()
+
+
+def _remove_web_note_when_unused(answer: str, web_search_used: bool) -> str:
+    if web_search_used:
+        return answer
+    lines = []
+    for line in answer.splitlines():
+        lowered = line.lower()
+        if "web search note" in lowered or "web search was used" in lowered or "based on web search" in lowered:
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _sentence_supported_by_context(sentence: str, context: str) -> bool:
+    normalized_sentence = _normalize_scope_text(sentence)
+    normalized_context = _normalize_scope_text(context)
+    if not normalized_sentence:
+        return True
+    if normalized_sentence == _normalize_scope_text(UNSUPPORTED_ANSWER):
+        return True
+    if not normalized_context:
+        return False
+
+    for year in re.findall(r"\b(?:1[5-9]\d{2}|20\d{2})\b", sentence):
+        if year not in normalized_context:
+            return False
+    flagged_phrases = (
+        "alan turing",
+        "history of",
+        "origin of",
+        "invented by",
+        "introduced by",
+        "coined by",
+    )
+    for phrase in flagged_phrases:
+        if phrase in normalized_sentence and phrase not in normalized_context:
+            return False
+
+    terms = [
+        term
+        for term in normalized_sentence.split()
+        if len(term) >= 4 and term not in _SCOPE_STOPWORDS
+    ]
+    if not terms:
+        return True
+    context_terms = set(normalized_context.split())
+    unique_terms = set(terms)
+    overlap = unique_terms & context_terms
+    if len(overlap) >= min(2, len(unique_terms)):
+        return True
+
+    sentence_phrases = _scope_phrases(normalized_sentence)
+    return any(phrase in normalized_context for phrase in sentence_phrases)
+
+
+def _remove_unsupported_sentences(answer: str, context_documents, web_search_used: bool) -> str:
+    if _is_structured_answer(answer):
+        return _remove_web_note_when_unused(answer, web_search_used)
+
+    context = _context_text(context_documents)
+    sentences = re.split(r"(?<=[.!?])\s+", answer.strip())
+    supported = [
+        sentence.strip()
+        for sentence in sentences
+        if _sentence_supported_by_context(sentence, context)
+    ]
+    if not supported:
+        return UNSUPPORTED_ANSWER
+    return _remove_web_note_when_unused(" ".join(supported), web_search_used)
+
+
+def _enforce_word_limit(answer: str, question: str) -> str:
+    if _is_structured_answer(answer):
+        return answer
+    limit = _requested_word_limit(question)
+    words = re.findall(r"\S+", answer)
+    if len(words) <= limit:
+        return answer
+    shortened = " ".join(words[:limit]).strip()
+    shortened = re.sub(r"[,;:]+$", "", shortened)
+    if shortened and shortened[-1] not in ".!?":
+        shortened += "."
+    return shortened
+
+
+def _finalize_answer(
+    answer: str,
+    question: str,
+    context_documents=None,
+    web_search_used: bool = False,
+) -> str:
+    leaked_prompt_markers = (
+        "you are rewriting a failed rag answer",
+        "you are an expert agentic rag assistant",
+        "answer length target:",
+    )
+    lowered = answer.lower()
+    if any(marker in lowered for marker in leaked_prompt_markers):
+        return UNSUPPORTED_ANSWER
+    answer = _remove_unsupported_sentences(answer.strip(), context_documents or [], web_search_used)
+    answer = _dedupe_repeated_sentences(answer.strip())
+    return _enforce_word_limit(answer, question)
 
 
 def _is_collection_related(
@@ -368,6 +687,40 @@ def _collection_scope_documents(session: RagSession, sources: List[ScoredDocumen
         source_docs = [source.document for source in sources if source.document is not None]
         return [*sources, *source_docs[:4]]
     return list(session.documents[:12])
+
+
+def _summary_context_documents(session: RagSession, sources: List[ScoredDocument]) -> List:
+    if not session.documents:
+        return list(sources[:12])
+
+    selected = []
+    seen = set()
+
+    def add(doc):
+        metadata = getattr(doc, "metadata", {}) or {}
+        key = metadata.get("chunk_id") or getattr(doc, "page_content", str(doc))[:120]
+        if key in seen:
+            return
+        seen.add(key)
+        selected.append(doc)
+
+    total = len(session.documents)
+    windows = [
+        range(0, min(4, total)),
+        range(max(0, (total // 2) - 2), min(total, (total // 2) + 2)),
+        range(max(0, total - 4), total),
+    ]
+    for window in windows:
+        for index in window:
+            add(session.documents[index])
+            if len(selected) >= 12:
+                return selected
+
+    for source in sources:
+        add(source.document if hasattr(source, "document") else source)
+        if len(selected) >= 12:
+            break
+    return selected
 
 
 def _has_scope_evidence(question: str, context: str) -> bool:
@@ -711,8 +1064,8 @@ def _evaluate_answer(
     )
     if any(phrase in lowered for phrase in weak_phrases):
         return "not_good"
-    if not context_documents and any(marker in lowered for marker in ("general knowledge", "general answer", "general ai knowledge")):
-        return "good"
+    if any(marker in lowered for marker in ("general knowledge", "general answer", "general ai knowledge")):
+        return "not_good"
     try:
         llm = get_chat_model(streaming=False, credentials=credentials)
         result = llm.invoke(
@@ -726,7 +1079,7 @@ def _evaluate_answer(
         lowered_result = result.strip().lower()
         return "good" if "good" in lowered_result and "not_good" not in lowered_result else "not_good"
     except Exception:
-        return "good"
+        return "not_good"
 
 
 def _generate_answer(
@@ -738,11 +1091,13 @@ def _generate_answer(
     credentials: RuntimeCredentials | None = None,
 ):
     llm = get_chat_model(streaming=streaming, credentials=credentials)
+    answer_length = _effective_answer_length(question, answer_length)
     messages = _format_prompt(
         GENERATE_PROMPT,
         context=build_context(context_documents),
         question=question,
         confidence_level=confidence_level,
+        language_instruction=_language_instruction(question),
         answer_length=answer_length,
     )
     if streaming:
@@ -784,31 +1139,36 @@ def _agentic_chat_plan(
         collection_related = True
         trace.append(_trace("Collection relevance grading skipped by settings.", "info", "scope_gate"))
 
-    if not sources and collection_related:
+    if _is_document_summary_intent(question) and session.documents:
+        context_documents = _summary_context_documents(session, sources)
+        confidence_level = "medium" if context_documents else confidence_level
+        trace.append(_trace("Using broader document context for summary request.", "info", "retrieve"))
+
+    if not sources and collection_related and not context_documents:
         if allow_web_search and web_search_configured:
             web_sources, web_documents = _run_web_fallback(question, trace, credentials)
-            if web_documents:
+            if _has_useful_web_documents(web_documents):
                 search_type = "web_search"
                 context_documents = web_documents
                 confidence_level = "web"
         elif allow_web_search:
             trace.append(_trace("Web search requested but Tavily is not configured.", "warning", "web_search"))
         else:
-            trace.append(_trace("Web search is available for this related question, pending user approval.", "warning", "web_search"))
-    elif not sources:
+            trace.append(_trace("No collection context found and web search is off.", "warning", "web_search"))
+    elif not sources and not context_documents:
         if allow_web_search and web_search_configured:
             web_sources, web_documents = _run_web_fallback(question, trace, credentials)
-            if web_documents:
+            if _has_useful_web_documents(web_documents):
                 search_type = "web_search"
                 context_documents = web_documents
                 confidence_level = "web"
         elif allow_web_search:
             trace.append(_trace("Web search requested but Tavily is not configured.", "warning", "web_search"))
         else:
-            trace.append(_trace("No related collection chunks found. General answer is allowed with clear labeling.", "warning", "scope_gate"))
+            trace.append(_trace("No related collection chunks found and web search is off.", "warning", "scope_gate"))
     elif collection_related and allow_web_search and web_search_configured and _question_may_need_web_search(question):
         web_sources, web_documents = _run_web_fallback(question, trace, credentials)
-        if web_documents:
+        if _has_useful_web_documents(web_documents):
             search_type = "web_search"
             context_documents = [*sources, *web_documents]
             confidence_level = "web"
@@ -817,7 +1177,7 @@ def _agentic_chat_plan(
     elif not collection_related:
         if allow_web_search and web_search_configured:
             web_sources, web_documents = _run_web_fallback(question, trace, credentials)
-            if web_documents:
+            if _has_useful_web_documents(web_documents):
                 search_type = "web_search"
                 context_documents = web_documents
                 confidence_level = "web"
@@ -848,12 +1208,13 @@ def _agentic_chat_plan(
         "trace": trace,
         "sources": serialized_sources,
         "web_sources": web_sources,
+        "web_documents": web_documents,
         "context_documents": context_documents,
         "search_type": search_type,
         "confidence_level": confidence_level,
         "retrieved_docs_count": len(sources),
         "web_results_count": len(web_sources),
-        "web_search_used": bool(web_sources),
+        "web_search_used": _has_useful_web_documents(web_documents),
         "collection_relevance": "related" if collection_related else "unrelated",
         "web_search_eligible": web_search_eligible,
         "allow_web_search": allow_web_search,
@@ -876,15 +1237,18 @@ def ask_session(
     plan = _agentic_chat_plan(session, question, allow_web_search, credentials)
     iteration_count = 1
     if not plan["context_documents"]:
-        if plan.get("web_search_eligible", True):
-            plan["trace"].append(_trace("No answer context available; generating a clearly labeled general answer.", "warning", "generate"))
-            answer = _generate_answer(question, [], "none", answer_length, credentials=credentials)
-        else:
-            plan["trace"].append(_trace("No answer context available; returning a scope-safe response.", "warning", "generate"))
-            answer = "This question appears outside the selected document collection, so I did not run web search."
+        plan["trace"].append(_trace("No answer context available; returning document fallback.", "warning", "generate"))
+        answer = UNSUPPORTED_ANSWER
     else:
         plan["trace"].append(_trace("Generating answer from current context.", "info", "generate"))
-        answer = _generate_answer(question, plan["context_documents"], plan["confidence_level"], answer_length, credentials=credentials)
+        answer = _finalize_answer(
+            _generate_answer(question, plan["context_documents"], plan["confidence_level"], answer_length, credentials=credentials),
+            question,
+            plan["context_documents"],
+            plan["web_search_used"],
+        )
+        if plan["web_search_used"]:
+            answer = _ensure_web_answer(answer, plan.get("web_documents", []))
     if not session.enable_evaluation:
         evaluation = "skipped"
     elif not plan.get("web_search_eligible", True) and not plan["context_documents"]:
@@ -901,23 +1265,34 @@ def ask_session(
         and iteration_count < session.max_iterations
     ):
         web_sources, web_documents = _run_web_fallback(question, plan["trace"], credentials)
-        if web_documents:
+        if _has_useful_web_documents(web_documents):
             iteration_count += 1
             plan["web_sources"] = web_sources
+            plan["web_documents"] = web_documents
             plan["context_documents"] = web_documents
             plan["search_type"] = "web_search"
             plan["confidence_level"] = "web"
             plan["web_search_used"] = True
             plan["trace"].append(_trace("Regenerating answer with web-search context.", "info", "generate"))
-            answer = _generate_answer(question, web_documents, "web", answer_length, credentials=credentials)
+            answer = _finalize_answer(
+                _generate_answer(question, web_documents, "web", answer_length, credentials=credentials),
+                question,
+                web_documents,
+                True,
+            )
+            answer = _ensure_web_answer(answer, web_documents)
             evaluation = _evaluate_answer(question, answer, web_documents, credentials)
             plan["trace"].append(
                 _trace(f"Evaluation after web search: {evaluation}.", "success" if evaluation == "good" else "warning", "evaluate")
             )
-    elif evaluation == "not_good" and not plan.get("web_search_eligible", True):
+    if evaluation == "not_good" and not plan.get("web_search_eligible", True):
         plan["trace"].append(
             _trace("Web search skipped because the question is outside the selected collection scope.", "warning", "scope_gate")
         )
+    if evaluation == "not_good" and not plan["web_search_used"]:
+        plan["trace"].append(_trace("Answer was not supported by available document context.", "warning", "generate"))
+        answer = UNSUPPORTED_ANSWER
+        evaluation = "good"
     elif (
         plan.get("web_search_eligible", True)
         and plan.get("web_search_available", False)
@@ -999,32 +1374,12 @@ def stream_session_answer(
             },
         )
         if not plan["context_documents"]:
-            if plan.get("web_search_eligible", True):
-                no_context_trace = _trace("No answer context available; generating a clearly labeled general answer.", "warning", "generate")
-            else:
-                no_context_trace = _trace("No answer context available; returning a scope-safe response.", "warning", "generate")
+            no_context_trace = _trace("No answer context available; returning document fallback.", "warning", "generate")
             plan["trace"].append(no_context_trace)
             yield _sse("trace", no_context_trace)
-            if plan.get("web_search_eligible", True):
-                answer_parts: List[str] = []
-                for chunk in _generate_answer(
-                    question,
-                    [],
-                    "none",
-                    answer_length,
-                    streaming=True,
-                    credentials=credentials,
-                ):
-                    token = getattr(chunk, "content", "") or ""
-                    if token:
-                        answer_parts.append(token)
-                        yield _sse("token", {"token": token})
-                message = "".join(answer_parts)
-                evaluation = "skipped" if not session.enable_evaluation else _evaluate_answer(question, message, [], credentials)
-            else:
-                message = "This question appears outside the selected document collection, so I did not run web search."
-                yield _sse("token", {"token": message})
-                evaluation = "skipped" if not session.enable_evaluation else "not_good"
+            message = UNSUPPORTED_ANSWER
+            yield _sse("token", {"token": message})
+            evaluation = "skipped" if not session.enable_evaluation else "good"
             trace = plan["trace"] + [_trace(f"Evaluation: {evaluation}.", "success" if evaluation in {"good", "skipped"} else "warning", "evaluate")]
             yield _sse(
                 "done",
@@ -1070,8 +1425,14 @@ def stream_session_answer(
             token = getattr(chunk, "content", "") or ""
             if token:
                 answer_parts.append(token)
-                yield _sse("token", {"token": token})
-        final_answer = "".join(answer_parts)
+        final_answer = _finalize_answer(
+            "".join(answer_parts),
+            question,
+            plan["context_documents"],
+            plan["web_search_used"],
+        )
+        if plan["web_search_used"]:
+            final_answer = _ensure_web_answer(final_answer, plan.get("web_documents", []))
         evaluation = "skipped" if not session.enable_evaluation else _evaluate_answer(question, final_answer, plan["context_documents"], credentials)
         eval_trace = _trace(f"Evaluation: {evaluation}.", "success" if evaluation in {"good", "skipped"} else "warning", "evaluate")
         plan["trace"].append(eval_trace)
@@ -1088,9 +1449,10 @@ def stream_session_answer(
             web_sources, web_documents = _run_web_fallback(question, plan["trace"], credentials)
             for step in plan["trace"][-2:]:
                 yield _sse("trace", step)
-            if web_documents:
+            if _has_useful_web_documents(web_documents):
                 iteration_count += 1
                 plan["web_sources"] = web_sources
+                plan["web_documents"] = web_documents
                 plan["search_type"] = "web_search"
                 plan["confidence_level"] = "web"
                 plan["web_search_used"] = True
@@ -1129,8 +1491,13 @@ def stream_session_answer(
                     token = getattr(chunk, "content", "") or ""
                     if token:
                         answer_parts.append(token)
-                        yield _sse("token", {"token": token})
-                final_answer = "".join(answer_parts)
+                final_answer = _finalize_answer(
+                    "".join(answer_parts),
+                    question,
+                    web_documents,
+                    True,
+                )
+                final_answer = _ensure_web_answer(final_answer, web_documents)
                 evaluation = "skipped" if not session.enable_evaluation else _evaluate_answer(question, final_answer, web_documents, credentials)
                 eval_trace = _trace(
                     f"Evaluation after web search: {evaluation}.",
@@ -1156,7 +1523,13 @@ def stream_session_answer(
             yield _sse("trace", approval_trace)
         else:
             plan["web_search_requires_approval"] = False
-
+        if evaluation == "not_good" and not plan["web_search_used"]:
+            unsupported_trace = _trace("Answer was not supported by available document context.", "warning", "generate")
+            plan["trace"].append(unsupported_trace)
+            yield _sse("trace", unsupported_trace)
+            final_answer = UNSUPPORTED_ANSWER
+            evaluation = "good"
+        yield _sse("token", {"token": final_answer})
         yield _sse(
             "done",
             {

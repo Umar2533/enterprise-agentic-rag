@@ -61,6 +61,14 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("OPENAI_API_KEY", "openai_api_key"),
     )
+    groq_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("GROQ_API_KEY", "groq_api_key"),
+    )
+    groq_model: str = Field(
+        default="llama-3.1-8b-instant",
+        validation_alias=AliasChoices("GROQ_MODEL", "groq_model"),
+    )
     llm_provider: str = Field(
         default="auto",
         validation_alias=AliasChoices("LLM_PROVIDER", "llm_provider"),
@@ -89,6 +97,50 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("TAVILY_API_KEY", "tavily_api_key"),
     )
+
+    # adding cloudflaure api token and account id to settings
+    cloudflare_account_id: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "CLOUDFLARE_ACCOUNT_ID",
+            "cloudflare_account_id",
+        ),
+    )
+
+    cloudflare_api_token: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "CLOUDFLARE_API_TOKEN",
+            "cloudflare_api_token",
+        ),
+    )
+
+    cloudflare_embedding_model: str = Field(
+        default="@cf/baai/bge-small-en-v1.5",
+        validation_alias=AliasChoices(
+            "CLOUDFLARE_EMBEDDING_MODEL",
+            "cloudflare_embedding_model",
+        ),
+    )
+
+    gemini_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "GEMINI_API_KEY",
+            "gemini_api_key",
+        ),
+    )
+
+    #llm provider
+    embedding_provider: str = Field(
+        default="huggingface",
+        validation_alias=AliasChoices("EMBEDDING_PROVIDER", "embedding_provider"),
+    )
+    allow_local_embeddings: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ALLOW_LOCAL_EMBEDDINGS", "allow_local_embeddings"),
+    )
+
     database_url: str = Field(
         default=f"sqlite:///{ROOT_DIR / 'data' / 'app.db'}",
         validation_alias=AliasChoices("DATABASE_URL", "database_url"),
@@ -347,9 +399,17 @@ def validate_production_settings() -> None:
 APP_NAME = settings.app_name
 ENVIRONMENT = settings.environment
 OPENAI_API_KEY = settings.openai_api_key
+GROQ_API_KEY = settings.groq_api_key
+GROQ_MODEL = settings.groq_model
 QDRANT_URL = settings.qdrant_url
 QDRANT_API_KEY = settings.qdrant_api_key
 TAVILY_API_KEY = settings.tavily_api_key
+EMBEDDING_PROVIDER = settings.embedding_provider
+ALLOW_LOCAL_EMBEDDINGS = settings.allow_local_embeddings
+CLOUDFLARE_ACCOUNT_ID = settings.cloudflare_account_id
+CLOUDFLARE_API_TOKEN = settings.cloudflare_api_token
+CLOUDFLARE_EMBEDDING_MODEL = settings.cloudflare_embedding_model
+GEMINI_API_KEY = settings.gemini_api_key
 DATABASE_URL = settings.database_url
 BACKEND_API_KEY = settings.backend_api_key
 PRIMARY_ADMIN_EMAIL = settings.primary_admin_email

@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Optional local HuggingFace embeddings for development only.
+# These packages pull large torch/transformers dependencies and should not be
+# installed on Render Free production instances.
+langchain-huggingface>=0.0.3
+sentence-transformers>=2.7.0

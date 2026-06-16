@@ -13,6 +13,7 @@ OPENAI_QUOTA_MESSAGE = (
     "Your OpenAI API key has no available quota. Please add billing/credits in "
     "OpenAI Platform or use another key."
 )
+DOCUMENT_NO_MENTION_MESSAGE = "The document does not mention this."
 
 
 class RenderFreeChatError(RuntimeError):
@@ -69,28 +70,32 @@ def chat_render_free_openai(
         chunks = [_chunk_from_point(point) for point in points]
         chunks = [chunk for chunk in chunks if chunk is not None]
         context = _context_text(chunks)
-        completion = openai.chat.completions.create(
-            model=CHAT_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Answer using the retrieved document context. Start directly, use the "
-                        "same language as the question, and never invent document facts or citations. "
-                        "If the context is insufficient, say so clearly."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Answer length target: {answer_length}\n\n"
-                        f"Retrieved context:\n{context or '[No matching document context]'}\n\n"
-                        f"Question:\n{question}"
-                    ),
-                },
-            ],
-        )
-        answer = completion.choices[0].message.content if completion.choices else ""
+        if context:
+            completion = openai.chat.completions.create(
+                model=CHAT_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Answer using only the retrieved document context. Do not add external facts, "
+                            "opinions, predictions, recommendations, or general knowledge. If the document "
+                            f"context does not directly answer the question, say exactly: {DOCUMENT_NO_MENTION_MESSAGE} "
+                            "Do not repeat the same sentence."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Answer length target: {answer_length}\n\n"
+                            f"Retrieved context:\n{context}\n\n"
+                            f"Question:\n{question}"
+                        ),
+                    },
+                ],
+            )
+            answer = completion.choices[0].message.content if completion.choices else ""
+        else:
+            answer = DOCUMENT_NO_MENTION_MESSAGE
         if not (answer or "").strip():
             raise RenderFreeChatError("OpenAI returned an empty chat response.")
     except RenderFreeChatError:
@@ -105,7 +110,7 @@ def chat_render_free_openai(
         {"message": "Generated answer with OpenAI BYOK.", "kind": "success"},
     ]
     return {
-        "answer": answer.strip(),
+        "answer": _dedupe_repeated_sentences(answer.strip()),
         "search_type": "vectorstore",
         "evaluation": "skipped",
         "iteration_count": 1,
@@ -246,6 +251,33 @@ def _confidence_level(chunks: list[RetrievedChunk]) -> str:
     if top_score >= 0.5:
         return "medium"
     return "low"
+
+
+def _dedupe_repeated_sentences(answer: str) -> str:
+    seen: set[str] = set()
+    lines: list[str] = []
+    for raw_line in (answer or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            if lines and lines[-1]:
+                lines.append("")
+            continue
+        parts = line.split(". ")
+        kept = []
+        for index, part in enumerate(parts):
+            sentence = part.strip()
+            if not sentence:
+                continue
+            if index < len(parts) - 1 and not sentence.endswith("."):
+                sentence = f"{sentence}."
+            key = " ".join(sentence.lower().split())
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append(sentence)
+        if kept:
+            lines.append(" ".join(kept))
+    return "\n".join(lines).strip()
 
 
 def _validate_qdrant_url(url: str) -> None:

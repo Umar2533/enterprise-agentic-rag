@@ -7,7 +7,8 @@ DEFAULT_EMBEDDING_PROVIDER = "huggingface"
 SUPPORTED_EMBEDDING_PROVIDERS = (
     "huggingface",
     "sentence-transformers",
-    "sentence_transformers",
+    "gemini",
+    "cloudflare",
     "openai",
 )
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"

@@ -25,7 +25,12 @@ from app.services.collections.user_collection_service import (
     get_user_collection_by_display_name,
     physical_collection_name,
 )
-from app.services.llm.embeddings_service import UnsupportedEmbeddingProviderError, normalize_embedding_provider
+from app.services.llm.embeddings_service import (
+    UnsupportedEmbeddingProviderError,
+    embedding_model_for_provider,
+    embedding_vector_size_for_provider,
+    normalize_embedding_provider,
+)
 from app.services.ingestion.document_validator import (
     DocumentValidationError,
     sanitize_filename,
@@ -75,6 +80,8 @@ async def upload_document(
 ):
     try:
         embedding_provider = normalize_embedding_provider(embedding_provider)
+        embedding_model = embedding_model_for_provider(embedding_provider)
+        vector_size = embedding_vector_size_for_provider(embedding_provider, embedding_model)
     except UnsupportedEmbeddingProviderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     require_render_free_openai(runtime_openai_key, embedding_provider)
@@ -152,6 +159,8 @@ async def upload_document(
                 session_id=result.session_id,
                 filename=result.filename,
                 embedding_provider="openai",
+                embedding_model=embedding_model_for_provider("openai"),
+                vector_size=embedding_vector_size_for_provider("openai"),
                 source="upload",
             )
             if result.skipped:
@@ -273,6 +282,8 @@ async def upload_document(
                 session_id=session.session_id,
                 filename=file.filename or saved_name,
                 embedding_provider=session.embedding_provider,
+                embedding_model=session.embedding_model,
+                vector_size=session.vector_size,
                 source="upload",
             )
             summary = get_collection_build_summary(db, session.collection_name, current_user.id)
@@ -324,6 +335,8 @@ async def upload_document(
             session_id=session_id,
             filename=session.filename,
             embedding_provider=session.embedding_provider,
+            embedding_model=session.embedding_model,
+            vector_size=session.vector_size,
             source="upload",
         )
         build_documents = session.build_documents or session.documents

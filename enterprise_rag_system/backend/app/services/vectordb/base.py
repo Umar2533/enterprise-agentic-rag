@@ -14,6 +14,7 @@ class VectorDB(ABC):
         collection_name: str,
         embedding_provider: str,
         credentials: RuntimeCredentials | None = None,
+        embedding_model: str | None = None,
     ):
         raise NotImplementedError
 

@@ -4,10 +4,13 @@ import re
 import streamlit as st
 
 from components.runtime_secrets import (
+    EMBEDDING_PROVIDER_OPTIONS,
+    default_embedding_provider,
+    embedding_provider_label,
     get_secret_value,
     get_key_source,
     init_runtime_secret_state,
-    default_embedding_provider,
+    normalize_embedding_provider_choice,
     render_compact_api_status,
 )
 
@@ -157,10 +160,16 @@ def _render_query_logs_sidebar() -> None:
 def render_rag_controls_panel() -> None:
     st.markdown("Choose embedding provider and runtime RAG behavior.")
     with st.form("settings_form"):
+        provider_options = list(EMBEDDING_PROVIDER_OPTIONS)
+        current_provider = normalize_embedding_provider_choice(
+            st.session_state.get("embedding_provider", default_embedding_provider())
+        ) or default_embedding_provider()
+        st.session_state.pending_embedding_provider = current_provider
         provider = st.selectbox(
             "Embedding provider",
-            ["huggingface", "openai"],
-            index=0 if st.session_state.get("embedding_provider", default_embedding_provider()) == "huggingface" else 1,
+            provider_options,
+            index=provider_options.index(current_provider) if current_provider in provider_options else 0,
+            format_func=embedding_provider_label,
             key="pending_embedding_provider",
         )
         render_compact_api_status()

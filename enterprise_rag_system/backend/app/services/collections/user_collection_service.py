@@ -24,6 +24,8 @@ def create_user_collection(
     session_id: str | None = None,
     filename: str | None = None,
     embedding_provider: str | None = None,
+    embedding_model: str | None = None,
+    vector_size: int | None = None,
     source: str = "upload",
 ) -> UserCollection:
     existing = get_user_collection_by_name(db, user_id, collection_name)
@@ -31,6 +33,8 @@ def create_user_collection(
         existing.session_id = session_id or existing.session_id
         existing.filename = filename or existing.filename
         existing.embedding_provider = embedding_provider or existing.embedding_provider
+        existing.embedding_model = embedding_model or existing.embedding_model
+        existing.vector_size = vector_size or existing.vector_size
         existing.source = source or existing.source
         existing.display_name = display_name or existing.display_name or collection_name
         existing.is_active = True
@@ -46,6 +50,8 @@ def create_user_collection(
         session_id=session_id,
         filename=filename,
         embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        vector_size=vector_size,
         source=source,
         is_active=True,
     )
@@ -140,12 +146,18 @@ def update_user_collection_session(
     db: Session,
     user_collection_id: int,
     session_id: str,
+    embedding_provider: str | None = None,
+    embedding_model: str | None = None,
+    vector_size: int | None = None,
 ) -> UserCollection | None:
     user_collection = db.get(UserCollection, user_collection_id)
     if user_collection is None:
         return None
 
     user_collection.session_id = session_id
+    user_collection.embedding_provider = embedding_provider or user_collection.embedding_provider
+    user_collection.embedding_model = embedding_model or user_collection.embedding_model
+    user_collection.vector_size = vector_size or user_collection.vector_size
     user_collection.is_active = True
     db.add(user_collection)
     db.commit()

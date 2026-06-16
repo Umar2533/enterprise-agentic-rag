@@ -16,6 +16,8 @@ class CollectionRecord:
     collection_name: str
     source: str = "qdrant"
     embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER
+    embedding_model: str = ""
+    vector_size: int | None = None
     chunk_count: int = 0
     bm25_ready: bool = False
 
@@ -42,10 +44,14 @@ def sync_collection_registry() -> List[dict]:
             documents = _DOCUMENTS.get(cache_key)
             chunk_count = len(documents) if documents is not None else _bm25_chunk_count(name)
             embedding_provider = _infer_embedding_provider(documents)
+            embedding_model = _infer_embedding_model(documents)
+            vector_size = _infer_vector_size(documents)
             record = CollectionRecord(
                 collection_name=name,
                 source="qdrant",
                 embedding_provider=embedding_provider,
+                embedding_model=embedding_model,
+                vector_size=vector_size,
                 chunk_count=chunk_count,
                 bm25_ready=bm25_index_exists(name),
             )
@@ -62,6 +68,8 @@ def register_collection(
     documents: List[Document],
     embedding_provider: str,
     source: str = "runtime",
+    embedding_model: str = "",
+    vector_size: int | None = None,
 ) -> None:
     embedding_provider = normalize_embedding_provider(embedding_provider)
     cache_key = (current_qdrant_scope_key(), collection_name)
@@ -71,6 +79,8 @@ def register_collection(
             collection_name=collection_name,
             source=source,
             embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            vector_size=vector_size,
             chunk_count=len(documents),
             bm25_ready=bm25_index_exists(collection_name) or bool(documents),
         )
@@ -104,6 +114,8 @@ def get_collection_documents(collection_name: str) -> List[Document]:
                 _DOCUMENTS[cache_key] = documents
                 if cache_key in _REGISTRY:
                     _REGISTRY[cache_key].embedding_provider = _infer_embedding_provider(documents)
+                    _REGISTRY[cache_key].embedding_model = _infer_embedding_model(documents)
+                    _REGISTRY[cache_key].vector_size = _infer_vector_size(documents)
                     _REGISTRY[cache_key].chunk_count = len(documents)
     with _LOCK:
         return list(_DOCUMENTS.get(cache_key, []))
@@ -145,3 +157,21 @@ def _infer_embedding_provider(documents: List[Document] | None) -> str:
             except ValueError:
                 return DEFAULT_EMBEDDING_PROVIDER
     return DEFAULT_EMBEDDING_PROVIDER
+
+
+def _infer_embedding_model(documents: List[Document] | None) -> str:
+    for document in documents or []:
+        model = (document.metadata or {}).get("embedding_model")
+        if model:
+            return str(model)
+    return ""
+
+
+def _infer_vector_size(documents: List[Document] | None) -> int | None:
+    for document in documents or []:
+        value = (document.metadata or {}).get("vector_size")
+        try:
+            return int(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+    return None

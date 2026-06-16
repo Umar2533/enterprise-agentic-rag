@@ -76,19 +76,34 @@ def _chat_collection(db: Session, user: User, request: ChatRequest) -> UserColle
     return collection
 
 
-def _ensure_render_free_openai_session(
+def _ensure_collection_runtime_session(
     request: ChatRequest,
     credentials: RuntimeCredentials,
     collection: UserCollection | None,
 ) -> None:
-    if not get_settings().render_free_mvp or collection is None:
+    if collection is None:
         return
 
     from app.services.rag_runtime import get_runtime_session, select_existing_collection
     from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
 
     session = get_runtime_session(request.session_id)
-    if session is not None and session.collection_name == collection.collection_name:
+    embedding_provider = (
+        (collection.embedding_provider or "").strip()
+        or (session.embedding_provider if session is not None else "")
+        or "huggingface"
+    )
+    embedding_model = (collection.embedding_model or "").strip() or (
+        session.embedding_model if session is not None else None
+    )
+    vector_size = collection.vector_size or (session.vector_size if session is not None else None)
+    if (
+        session is not None
+        and session.collection_name == collection.collection_name
+        and session.embedding_provider == embedding_provider
+        and (not embedding_model or session.embedding_model == embedding_model)
+        and (not vector_size or session.vector_size == vector_size)
+    ):
         return
     with qdrant_runtime_credentials(
         credentials.effective_qdrant_url,
@@ -97,7 +112,9 @@ def _ensure_render_free_openai_session(
         select_existing_collection(
             session_id=request.session_id,
             collection_name=collection.collection_name,
-            embedding_provider="openai",
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            vector_size=vector_size,
             credentials=credentials,
         )
 
@@ -282,7 +299,7 @@ def chat(
     from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
 
     credentials = _runtime_credentials(request, openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
-    _ensure_render_free_openai_session(request, credentials, collection)
+    _ensure_collection_runtime_session(request, credentials, collection)
     _log_collection_context(request)
     _log_llm_selection(credentials)
     try:
@@ -399,7 +416,7 @@ def chat_stream(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
     credentials = _runtime_credentials(request, openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
-    _ensure_render_free_openai_session(request, credentials, collection)
+    _ensure_collection_runtime_session(request, credentials, collection)
     _log_collection_context(request)
     _log_llm_selection(credentials)
     return StreamingResponse(

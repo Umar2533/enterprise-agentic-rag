@@ -9,10 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.core.constants import (
     DEFAULT_EMBEDDING_PROVIDER,
-    EMBEDDING_MODEL,
-    OPENAI_EMBEDDING_MODEL,
 )
 from app.models.collection_build_summary import CollectionBuildSummary
+from app.services.llm.embeddings_service import embedding_model_for_provider
 
 if TYPE_CHECKING:
     from langchain_core.documents import Document
@@ -22,10 +21,6 @@ else:
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def embedding_model_for_provider(embedding_provider: str) -> str:
-    return OPENAI_EMBEDDING_MODEL if embedding_provider == "openai" else EMBEDDING_MODEL
 
 
 def file_type_from_path(file_path: str | Path) -> str:

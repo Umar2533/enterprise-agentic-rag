@@ -12,6 +12,7 @@ REQUIRED_KEYS = ("OPENAI_API_KEY", "TAVILY_API_KEY")
 WORKSPACE_REQUIRED_KEYS = ("OPENAI_API_KEY",)
 SERVER_KEY_FLAGS = {
     "OPENAI_API_KEY": "openai_configured",
+    "GROQ_API_KEY": "groq_configured",
     "TAVILY_API_KEY": "tavily_configured",
     "QDRANT_URL": "qdrant_configured",
     "QDRANT_API_KEY": "qdrant_api_key_configured",
@@ -26,6 +27,12 @@ OPENAI_QUOTA_MESSAGE = (
     "Your OpenAI API key has no available quota. Please add billing/credits "
     "in OpenAI Platform or use another key."
 )
+EMBEDDING_PROVIDER_LABELS = {
+    "cloudflare": "Cloudflare Workers AI",
+    "openai": "OpenAI",
+    "huggingface": "HuggingFace Local",
+}
+EMBEDDING_PROVIDER_OPTIONS = tuple(EMBEDDING_PROVIDER_LABELS.keys())
 
 
 def init_runtime_secret_state() -> None:
@@ -92,8 +99,32 @@ def production_mvp_active() -> bool:
     )
 
 
+def normalize_embedding_provider_choice(provider: str | None) -> str:
+    value = (provider or "").strip().lower()
+    if value in {"sentence-transformers", "sentence_transformers"}:
+        return "huggingface"
+    if value in EMBEDDING_PROVIDER_LABELS:
+        return value
+    return ""
+
+
+def embedding_provider_label(provider: str) -> str:
+    return EMBEDDING_PROVIDER_LABELS.get(provider, provider)
+
+
 def default_embedding_provider() -> str:
-    return "openai" if production_mvp_active() else "huggingface"
+    health = st.session_state.get("backend_health") or {}
+    backend_provider = normalize_embedding_provider_choice(health.get("embedding_provider"))
+    if backend_provider:
+        return backend_provider
+    env_provider = normalize_embedding_provider_choice(
+        _env_value("EMBEDDING_PROVIDER")
+        or _env_value("DEFAULT_EMBEDDING_PROVIDER")
+        or _env_value("RAG_EMBEDDING_PROVIDER")
+    )
+    if env_provider:
+        return env_provider
+    return "cloudflare" if production_mvp_active() else "huggingface"
 
 
 def server_api_configured(backend_health: dict | None = None) -> bool:
@@ -120,8 +151,13 @@ def _server_api_config_state(backend_health: dict | None = None) -> dict:
             return {"configured": False, "available": False, "error": str(exc)}
 
     local_test_mode = bool(health_payload.get("local_test_mode"))
+    llm_server_configured = bool(
+        health_payload.get("openai_configured")
+        or health_payload.get("groq_configured")
+        or local_test_mode
+    )
     configured = bool(
-        (health_payload.get("openai_configured") or local_test_mode)
+        llm_server_configured
         and health_payload.get("qdrant_configured")
         and health_payload.get("qdrant_api_key_configured")
     )
@@ -129,9 +165,11 @@ def _server_api_config_state(backend_health: dict | None = None) -> dict:
         "configured": configured,
         "available": True,
         "openai_configured": bool(health_payload.get("openai_configured")),
+        "groq_configured": bool(health_payload.get("groq_configured")),
         "llm_provider": str(health_payload.get("llm_provider") or "auto"),
         "effective_llm_provider": str(health_payload.get("effective_llm_provider") or "auto"),
         "llm_model": str(health_payload.get("llm_model") or "unknown"),
+        "embedding_provider": str(health_payload.get("embedding_provider") or "unknown"),
         "local_test_mode": local_test_mode,
         "runtime_openai_active": bool(health_payload.get("runtime_openai_active")),
         "qdrant_configured": bool(health_payload.get("qdrant_configured")),
@@ -352,7 +390,7 @@ def render_runtime_credential_gate(location: str = "workspace") -> None:
     )
     if local_test_mode_active():
         st.markdown(
-            '<span class="runtime-mode-chip">Local test mode active &mdash; OpenAI optional</span>',
+            '<span class="runtime-mode-chip">Local test mode active &mdash; LLM key optional</span>',
             unsafe_allow_html=True,
         )
     _render_runtime_key_form(f"runtime_gate_{location}")
@@ -368,12 +406,12 @@ def render_runtime_credential_gate(location: str = "workspace") -> None:
 def _render_runtime_key_form(location: str) -> bool:
     with st.form(f"runtime_api_key_setup_{location}"):
         st.checkbox("Use OpenAI for this session", key=USE_OPENAI_KEY)
-        st.caption("Required for Upload + Chat.")
+        st.caption("LLM API key is required for AI chat. Embedding provider credentials are required for upload.")
         cols = st.columns(2)
         with cols[0]:
             _runtime_text_input(
                 "OPENAI_API_KEY",
-                "OpenAI API Key - Required for Upload + Chat",
+                "LLM API Key - Required for AI Chat",
                 "sk-...",
                 password=True,
                 optional=local_test_mode_active(),
@@ -440,7 +478,7 @@ def _runtime_text_input(
         help="Stored only in Streamlit session and sent per request.",
     )
     if name == "OPENAI_API_KEY":
-        st.caption("Required for Upload + Chat.")
+        st.caption("Required for AI chat when using OpenAI BYOK.")
 
 
 def clear_runtime_key_state() -> None:
@@ -564,14 +602,14 @@ def render_api_key_setup_panel(location: str = "main") -> bool:
         cols = st.columns(2)
         with cols[0]:
             st.text_input(
-                "OpenAI API Key - Required for Upload + Chat",
+                "LLM API Key - Required for AI Chat",
                 type="password",
                 key="setup_input_OPENAI_API_KEY",
                 placeholder="sk-...",
                 disabled=False,
                 help="Required for document upload and chat in OpenAI BYOK mode.",
             )
-            st.caption("Required for Upload + Chat.")
+            st.caption("Required for AI chat when using OpenAI BYOK.")
         with cols[1]:
             st.text_input(
                 "Tavily API Key - Optional for Web Search",
@@ -613,17 +651,19 @@ def render_compact_api_status() -> None:
     server_state = _server_api_config_state()
     llm_provider = str(server_state.get("effective_llm_provider") or server_state.get("llm_provider") or "unknown")
     llm_model = str(server_state.get("llm_model") or "unknown")
+    embedding_provider = str(server_state.get("embedding_provider") or "unknown")
+    embedding_provider_display = embedding_provider_label(embedding_provider)
     use_openai = bool(st.session_state.get(USE_OPENAI_KEY))
     fallback_warning = str(st.session_state.get(LLM_FALLBACK_WARNING_KEY) or "") if use_openai else ""
     if local_test_mode_active():
         st.markdown(
-            '<div class="runtime-mode-chip">Local test mode active &mdash; OpenAI optional</div>',
+            '<div class="runtime-mode-chip">Local test mode active &mdash; LLM key optional</div>',
             unsafe_allow_html=True,
         )
     quota_error = OPENAI_QUOTA_MESSAGE in fallback_warning
     runtime_openai_active = bool(get_secret_value("OPENAI_API_KEY"))
     groups = {
-        "OpenAI API Key - Required for Upload + Chat": {
+        "LLM API Key - Required for AI Chat": {
             **status["OPENAI_API_KEY"],
             "state": (
                 "Quota Error"
@@ -636,6 +676,12 @@ def render_compact_api_status() -> None:
         "Tavily API Key - Optional for Web Search": {
             **status["TAVILY_API_KEY"],
             "state": "Active" if status["TAVILY_API_KEY"]["configured"] else "Optional",
+        },
+        "Embedding Provider - Required for Upload": {
+            "configured": embedding_provider != "unknown",
+            "source": "backend",
+            "masked": embedding_provider_display,
+            "state": embedding_provider_display,
         },
     }
     if get_secret_value("BACKEND_API_KEY"):
@@ -680,7 +726,7 @@ def render_openai_session_controls() -> None:
     st.toggle("Use OpenAI for this session", key=USE_OPENAI_KEY)
     if st.session_state.get(USE_OPENAI_KEY):
         st.text_input(
-            "OpenAI API Key - Required for Upload + Chat",
+            "LLM API Key - Required for AI Chat",
             type="password",
             key="sidebar_runtime_openai_input",
             placeholder="sk-...",

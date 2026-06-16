@@ -15,18 +15,39 @@ from app.core.runtime_credentials import RuntimeCredentials
 logger = logging.getLogger(__name__)
 
 
+def _chat_messages(prompt_value) -> list[dict[str, str]]:
+    messages = getattr(prompt_value, "messages", None)
+    if not isinstance(messages, (list, tuple)):
+        return [{"role": "user", "content": str(prompt_value)}]
+
+    converted: list[dict[str, str]] = []
+    for message in messages:
+        role = str(getattr(message, "type", "") or getattr(message, "role", "")).lower()
+        if role in {"human", "user"}:
+            role = "user"
+        elif role in {"ai", "assistant"}:
+            role = "assistant"
+        elif role != "system":
+            role = "user"
+        converted.append({"role": role, "content": str(getattr(message, "content", message))})
+    return converted or [{"role": "user", "content": str(prompt_value)}]
+
+
 class OpenAIChatModelLite:
-    def __init__(self, api_key: str, model: str, streaming: bool):
+    def __init__(self, api_key: str, model: str, streaming: bool, base_url: str | None = None):
         from openai import OpenAI
 
-        self._client = OpenAI(api_key=api_key)
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self._client = OpenAI(**kwargs)
         self._model = model
         self._streaming = streaming
 
     def invoke(self, prompt: str):
         response = self._client.chat.completions.create(
             model=self._model,
-            messages=[{"role": "user", "content": str(prompt)}],
+            messages=_chat_messages(prompt),
             temperature=0,
         )
         return SimpleNamespace(content=response.choices[0].message.content or "")
@@ -34,7 +55,7 @@ class OpenAIChatModelLite:
     def stream(self, prompt: str):
         response = self._client.chat.completions.create(
             model=self._model,
-            messages=[{"role": "user", "content": str(prompt)}],
+            messages=_chat_messages(prompt),
             temperature=0,
             stream=True,
         )
@@ -136,18 +157,27 @@ def _local_stub_response(prompt_value) -> AIMessage:
 
 def get_chat_model(streaming: bool = True, credentials: RuntimeCredentials | None = None):
     credentials = credentials or RuntimeCredentials()
+    provider = credentials.llm_provider
     logger.info(
-        "LLM model selection runtime_key_present=%s env_key_present=%s selected_llm_provider=%s selected_model=%s fallback_used=%s",
+        "LLM model selection runtime_key_present=%s env_key_present=%s groq_key_present=%s selected_llm_provider=%s selected_model=%s fallback_used=%s",
         bool(credentials.openai_api_key),
         credentials.env_openai_api_key_present,
-        credentials.llm_provider,
+        credentials.env_groq_api_key_present,
+        provider,
         credentials.llm_model,
-        credentials.llm_provider == "local_stub",
+        provider == "local_stub",
     )
-    if credentials.llm_provider == "local_stub":
+    if provider == "local_stub":
         if get_settings().render_free_mvp:
             raise ValueError(MISSING_RUNTIME_OPENAI_KEY_MESSAGE)
         return RunnableLambda(_local_stub_response)
+    if provider == "groq":
+        return OpenAIChatModelLite(
+            api_key=credentials.require_groq_api_key(),
+            model=credentials.llm_model,
+            streaming=streaming,
+            base_url="https://api.groq.com/openai/v1",
+        )
     if get_settings().render_free_mvp:
         return OpenAIChatModelLite(
             api_key=credentials.require_openai_api_key(),

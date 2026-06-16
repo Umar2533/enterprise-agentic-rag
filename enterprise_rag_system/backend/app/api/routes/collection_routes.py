@@ -28,6 +28,10 @@ from app.services.collections.user_collection_service import (
     update_user_collection_session,
     user_owns_session,
 )
+from app.services.llm.embeddings_service import (
+    embedding_model_for_provider,
+    embedding_vector_size_for_provider,
+)
 from app.services.memory.memory_store import get_collection_memory, memory_stats
 
 router = APIRouter(prefix="/collections", tags=["collections"])
@@ -48,6 +52,8 @@ def _normalize_embedding_provider(provider: str | None) -> str:
         return DEFAULT_EMBEDDING_PROVIDER
     if normalized == "openai":
         return "openai"
+    if normalized == "cloudflare":
+        return "cloudflare"
     raise ValueError(f"Unsupported embedding provider: {provider}")
 
 
@@ -114,6 +120,12 @@ def _collection_item(
             or runtime_item.get("embedding_provider")
             or registry_item.get("embedding_provider")
         ),
+        "embedding_model": user_collection.embedding_model
+        or runtime_item.get("embedding_model")
+        or registry_item.get("embedding_model", ""),
+        "vector_size": user_collection.vector_size
+        or runtime_item.get("vector_size")
+        or registry_item.get("vector_size"),
         "source": user_collection.source or runtime_item.get("source") or "upload",
         "chunk_count": registry_item.get("chunk_count", 0),
         "bm25_ready": registry_item.get("bm25_ready", False),
@@ -217,10 +229,15 @@ def select_collection(
             raise HTTPException(status_code=503, detail=RAG_RUNTIME_DISABLED_MESSAGE)
 
         session_id = uuid.uuid4().hex
+        embedding_model = user_collection.embedding_model or embedding_model_for_provider("openai")
+        vector_size = user_collection.vector_size or embedding_vector_size_for_provider("openai", embedding_model)
         user_collection = update_user_collection_session(
             db,
             user_collection_id=user_collection.id,
             session_id=session_id,
+            embedding_provider="openai",
+            embedding_model=embedding_model,
+            vector_size=vector_size,
         )
         return {
             "success": True,
@@ -229,6 +246,8 @@ def select_collection(
             "display_name": user_collection.display_name or user_collection.collection_name,
             "filename": user_collection.filename or "existing_qdrant_collection",
             "embedding_provider": "openai",
+            "embedding_model": user_collection.embedding_model or embedding_model,
+            "vector_size": user_collection.vector_size or vector_size,
             "selected_at": datetime.now(timezone.utc).isoformat(),
             "retrieval_mode": "dense only",
             "retrieval_warning": "BM25 index is not available in Render Free MVP mode.",
@@ -239,11 +258,16 @@ def select_collection(
     credentials = _runtime_credentials_from_headers(openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
     started = time.monotonic()
     try:
-        embedding_provider = _normalize_embedding_provider(request.embedding_provider)
+        requested_provider = _normalize_embedding_provider(request.embedding_provider)
+        embedding_provider = _normalize_embedding_provider(
+            user_collection.embedding_provider or requested_provider
+        )
         logger.info(
-            "Collection select payload collection=%s embedding_provider=%s qdrant_host=%s",
+            "Collection select payload collection=%s embedding_provider=%s embedding_model=%s vector_size=%s qdrant_host=%s",
             requested_collection,
             embedding_provider,
+            user_collection.embedding_model or "",
+            user_collection.vector_size,
             qdrant.sanitized_qdrant_host(credentials.effective_qdrant_url),
         )
         with qdrant.qdrant_runtime_credentials(
@@ -255,6 +279,8 @@ def select_collection(
                 session_id=uuid.uuid4().hex,
                 collection_name=requested_collection,
                 embedding_provider=embedding_provider,
+                embedding_model=user_collection.embedding_model,
+                vector_size=user_collection.vector_size,
                 credentials=credentials,
             )
             logger.info(
@@ -275,6 +301,9 @@ def select_collection(
             db,
             user_collection_id=user_collection.id,
             session_id=session.session_id,
+            embedding_provider=session.embedding_provider,
+            embedding_model=session.embedding_model,
+            vector_size=session.vector_size,
         )
     display_name = (
         user_collection.display_name
@@ -304,6 +333,8 @@ def select_collection(
         "display_name": display_name,
         "filename": session.filename,
         "embedding_provider": session.embedding_provider,
+        "embedding_model": session.embedding_model,
+        "vector_size": session.vector_size,
         "selected_at": datetime.now(timezone.utc).isoformat(),
         "retrieval_mode": session.retrieval_mode,
         "retrieval_warning": session.retrieval_warning,
@@ -336,6 +367,8 @@ def active_collection_session(
         "display_name": user_collection.display_name or user_collection.collection_name,
         "filename": user_collection.filename or "existing_qdrant_collection",
         "embedding_provider": _normalize_embedding_provider(user_collection.embedding_provider),
+        "embedding_model": user_collection.embedding_model or "",
+        "vector_size": user_collection.vector_size,
         "selected_at": datetime.now(timezone.utc).isoformat(),
         "retrieval_mode": session.retrieval_mode if session else "",
         "retrieval_warning": session.retrieval_warning if session else "",

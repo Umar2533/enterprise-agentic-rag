@@ -9,6 +9,7 @@ from app.core.constants import CHAT_MODEL
 
 SECRET_PATTERNS = (
     re.compile(r"\b(sk-[A-Za-z0-9_\-]{8,})\b"),
+    re.compile(r"\b(gsk_[A-Za-z0-9_\-]{8,})\b"),
     re.compile(r"\b(tvly-[A-Za-z0-9_\-]{8,})\b", re.IGNORECASE),
 )
 
@@ -32,6 +33,7 @@ def redact_secrets_text(value: object) -> str:
 @dataclass(frozen=True)
 class RuntimeCredentials:
     openai_api_key: str = ""
+    groq_api_key: str = ""
     tavily_api_key: str = ""
     qdrant_url: str = ""
     qdrant_api_key: str = ""
@@ -42,6 +44,7 @@ class RuntimeCredentials:
     def from_values(
         cls,
         openai_api_key: str = "",
+        groq_api_key: str = "",
         tavily_api_key: str = "",
         qdrant_url: str = "",
         qdrant_api_key: str = "",
@@ -50,6 +53,7 @@ class RuntimeCredentials:
     ) -> "RuntimeCredentials":
         return cls(
             openai_api_key=(openai_api_key or "").strip(),
+            groq_api_key=(groq_api_key or "").strip(),
             tavily_api_key=(tavily_api_key or "").strip(),
             qdrant_url=(qdrant_url or "").strip(),
             qdrant_api_key=(qdrant_api_key or "").strip(),
@@ -65,6 +69,15 @@ class RuntimeCredentials:
     @property
     def env_openai_api_key_present(self) -> bool:
         return bool((get_settings().openai_api_key or "").strip())
+
+    @property
+    def effective_groq_api_key(self) -> str:
+        settings = get_settings()
+        return self.groq_api_key or (settings.groq_api_key or "").strip()
+
+    @property
+    def env_groq_api_key_present(self) -> bool:
+        return bool((get_settings().groq_api_key or "").strip())
 
     @property
     def effective_tavily_api_key(self) -> str:
@@ -87,11 +100,30 @@ class RuntimeCredentials:
             raise ValueError("OpenAI API key is required for this operation.")
         return key
 
+    def require_groq_api_key(self) -> str:
+        key = self.effective_groq_api_key
+        if not key:
+            raise ValueError("Groq API key is required when LLM_PROVIDER=groq.")
+        return key
+
     @property
     def llm_provider(self) -> str:
         if self.force_local_stub:
             return "local_stub"
-        return "openai" if self.effective_openai_api_key else "local_stub"
+        provider = (get_settings().llm_provider or "auto").strip().lower()
+        if provider not in {"auto", "openai", "groq", "local_stub"}:
+            provider = "auto"
+        if provider == "local_stub":
+            return "local_stub"
+        if provider == "openai":
+            return "openai" if self.effective_openai_api_key else "local_stub"
+        if provider == "groq":
+            return "groq" if self.effective_groq_api_key else "local_stub"
+        if self.effective_openai_api_key:
+            return "openai"
+        if self.effective_groq_api_key:
+            return "groq"
+        return "local_stub"
 
     @property
     def local_test_mode_active(self) -> bool:
@@ -100,11 +132,17 @@ class RuntimeCredentials:
 
     @property
     def llm_model(self) -> str:
-        return "deterministic context summarizer" if self.llm_provider == "local_stub" else CHAT_MODEL
+        if self.llm_provider == "local_stub":
+            return "deterministic context summarizer"
+        if self.llm_provider == "groq":
+            return get_settings().groq_model
+        return CHAT_MODEL
 
     def require_chat_credentials(self) -> None:
         if self.llm_provider == "openai":
             self.require_openai_api_key()
+        if self.llm_provider == "groq":
+            self.require_groq_api_key()
 
     @property
     def runtime_openai_active(self) -> bool:
@@ -112,6 +150,8 @@ class RuntimeCredentials:
 
     def as_local_stub(self) -> "RuntimeCredentials":
         return RuntimeCredentials.from_values(
+            openai_api_key=self.openai_api_key,
+            groq_api_key=self.groq_api_key,
             tavily_api_key=self.tavily_api_key,
             qdrant_url=self.qdrant_url,
             qdrant_api_key=self.qdrant_api_key,
@@ -148,9 +188,11 @@ class RuntimeCredentials:
         text = redact_secrets_text(value)
         for secret in (
             self.openai_api_key,
+            self.groq_api_key,
             self.tavily_api_key,
             self.qdrant_api_key,
             self.effective_openai_api_key,
+            self.effective_groq_api_key,
             self.effective_tavily_api_key,
             self.effective_qdrant_api_key,
         ):

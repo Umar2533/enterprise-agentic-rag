@@ -5,11 +5,15 @@ import streamlit as st
 from components.auth_panel import is_authenticated, render_fullscreen_auth_gate
 from components.layout import init_session_state, load_styles, validate_build_settings
 from components.runtime_secrets import (
+    EMBEDDING_PROVIDER_OPTIONS,
     LLM_FALLBACK_WARNING_KEY,
     OPENAI_QUOTA_MESSAGE,
+    default_embedding_provider,
+    embedding_provider_label,
     get_key_source,
     has_required_keys,
     maybe_request_key_reset,
+    normalize_embedding_provider_choice,
     render_api_key_setup_panel,
     require_runtime_credentials,
     required_keys_status,
@@ -207,7 +211,18 @@ def _sync_build_setting(ui_key: str, persistent_key: str) -> None:
 def _render_embedding_settings() -> None:
     with st.container(border=True):
         st.markdown('<div class="section-title"><div><h3>Embedding Settings</h3><p>Used by upload/build and collection attach flows.</p></div></div>', unsafe_allow_html=True)
-        st.selectbox("Embedding provider", ["huggingface", "openai"], key="embedding_provider")
+        provider_options = list(EMBEDDING_PROVIDER_OPTIONS)
+        current_provider = normalize_embedding_provider_choice(
+            st.session_state.get("embedding_provider", default_embedding_provider())
+        ) or default_embedding_provider()
+        st.session_state.embedding_provider = current_provider
+        st.selectbox(
+            "Embedding provider",
+            provider_options,
+            index=provider_options.index(current_provider) if current_provider in provider_options else 0,
+            format_func=embedding_provider_label,
+            key="embedding_provider",
+        )
 
 
 def _render_llm_settings() -> None:

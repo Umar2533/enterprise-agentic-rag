@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from app.core.config import get_settings
 from app.core.constants import OPENAI_EMBEDDING_MODEL
+from app.services.llm.embeddings_service import embedding_vector_size_for_provider
 
 
 class RenderFreeIngestionError(RuntimeError):
@@ -178,6 +179,8 @@ def _load_and_chunk(
                         "document_hash": document_hash,
                         "collection_name": collection_name,
                         "embedding_provider": "openai",
+                        "embedding_model": OPENAI_EMBEDDING_MODEL,
+                        "vector_size": embedding_vector_size_for_provider("openai"),
                         "chunk_index": index,
                     },
                 )

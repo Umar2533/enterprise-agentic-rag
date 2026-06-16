@@ -15,7 +15,7 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from app.core.config import get_settings
 from app.core.runtime_credentials import RuntimeCredentials
-from app.services.llm.embeddings_service import get_embeddings
+from app.services.llm.embeddings_service import embedding_vector_size_for_provider, get_embeddings
 from app.services.vectordb.base import VectorDB
 
 _RUNTIME_QDRANT_URL: ContextVar[str] = ContextVar("runtime_qdrant_url", default="")
@@ -308,6 +308,8 @@ class QdrantVectorDB(VectorDB):
         collection_name: str,
         embedding_provider: str,
         credentials: RuntimeCredentials | None = None,
+        embedding_model: str | None = None,
+        vector_size: int | None = None,
     ):
         url, _ = self._credentials()
         logger.info(
@@ -317,14 +319,24 @@ class QdrantVectorDB(VectorDB):
         )
         try:
             client = self._client()
-            vector_name = self._detect_existing_vector_name(client, collection_name)
+            vector_name, collection_vector_size = self._detect_existing_vector_config(client, collection_name)
         except (QdrantConfigurationError, QdrantHostResolutionError):
             raise
         except Exception as exc:
             _raise_qdrant_connection_error(exc, url)
+        expected_vector_size = vector_size or embedding_vector_size_for_provider(
+            embedding_provider,
+            embedding_model,
+        )
+        if collection_vector_size and expected_vector_size and collection_vector_size != expected_vector_size:
+            raise ValueError(
+                f"Embedding vector dimension mismatch for collection '{collection_name}': "
+                f"collection vector_size={collection_vector_size}, expected vector_size={expected_vector_size} "
+                f"for embedding_provider={embedding_provider} embedding_model={embedding_model or '<default>'}."
+            )
         kwargs = {
             "client": client,
-            "embedding": get_embeddings(embedding_provider, credentials),
+            "embedding": get_embeddings(embedding_provider, credentials, model=embedding_model),
             "collection_name": collection_name,
         }
         if vector_name:
@@ -360,6 +372,7 @@ class QdrantVectorDB(VectorDB):
         collection_name: str,
         embedding_provider: str,
         credentials: RuntimeCredentials | None = None,
+        embedding_model: str | None = None,
     ):
         url, api_key = self._credentials()
         url = validate_qdrant_url(url)
@@ -375,7 +388,7 @@ class QdrantVectorDB(VectorDB):
             return _run_ingestion_qdrant_operation(
                 lambda: QdrantVectorStore.from_documents(
                     documents=documents,
-                    embedding=get_embeddings(embedding_provider, credentials),
+                    embedding=get_embeddings(embedding_provider, credentials, model=embedding_model),
                     ids=point_ids,
                     url=url,
                     api_key=api_key or None,
@@ -424,6 +437,11 @@ class QdrantVectorDB(VectorDB):
 
     @staticmethod
     def _detect_existing_vector_name(client: QdrantClient, collection_name: str) -> str | None:
+        vector_name, _ = QdrantVectorDB._detect_existing_vector_config(client, collection_name)
+        return vector_name
+
+    @staticmethod
+    def _detect_existing_vector_config(client: QdrantClient, collection_name: str) -> tuple[str | None, int | None]:
         info = client.get_collection(collection_name)
         config = getattr(getattr(info, "config", None), "params", None)
         vectors_config: Any = getattr(config, "vectors", None)
@@ -431,15 +449,23 @@ class QdrantVectorDB(VectorDB):
         if isinstance(vectors_config, dict) or hasattr(vectors_config, "keys"):
             available = [name for name in vectors_config.keys() if name]
             if "dense" in available:
-                return "dense"
+                return "dense", _vector_config_size(vectors_config.get("dense"))
             if available:
                 names = ", ".join(sorted(available))
                 raise ValueError(
                     f"Collection '{collection_name}' uses named vectors ({names}). "
                     "Expected a vector named 'dense'."
                 )
-            return None
+            return None, None
 
+        return None, _vector_config_size(vectors_config)
+
+
+def _vector_config_size(vector_config: Any) -> int | None:
+    size = getattr(vector_config, "size", None)
+    try:
+        return int(size) if size is not None else None
+    except (TypeError, ValueError):
         return None
 
 

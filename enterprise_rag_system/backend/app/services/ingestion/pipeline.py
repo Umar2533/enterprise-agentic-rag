@@ -17,6 +17,8 @@ def load_and_chunk_document(
     chunk_overlap: int,
     collection_name: str,
     embedding_provider: str,
+    embedding_model: str = "",
+    vector_size: int | None = None,
 ) -> List[Document]:
     path = Path(file_path)
     validate_saved_file(path)
@@ -48,6 +50,8 @@ def load_and_chunk_document(
                 "document_hash": document_hash,
                 "collection_name": collection_name,
                 "embedding_provider": embedding_provider,
+                "embedding_model": embedding_model,
+                "vector_size": vector_size,
                 "chunk_index": idx,
                 "created_at": created_at,
             }

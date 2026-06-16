@@ -27,6 +27,8 @@ class UserCollection(Base):
     session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     embedding_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    vector_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(String(50), default="upload", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
