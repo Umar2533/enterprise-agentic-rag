@@ -102,12 +102,13 @@ class ApiConstants {
     return renderFreeMvp ||
             environment.toLowerCase() == 'production' ||
             productionBackend
-        ? 'openai'
+        ? 'cloudflare'
         : 'huggingface';
   }
 
   static const List<String> supportedEmbeddingProviders = [
     'huggingface',
+    'cloudflare',
     'openai',
     'sentence-transformers',
     'sentence_transformers',

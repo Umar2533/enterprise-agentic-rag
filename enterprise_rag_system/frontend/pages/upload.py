@@ -513,11 +513,12 @@ with main_right:
             unsafe_allow_html=True,
         )
         key_ready = has_required_keys()
-        embedding_ready = embedding_provider != "openai" or key_ready
+        requires_openai_key = embedding_provider == "openai"
+        embedding_ready = not requires_openai_key or key_ready
         name_ready = bool(collection_name and collection_name.strip())
         duplicate_collection = bool(collection_name and collection_name.strip() in existing_names)
         settings_errors = validate_build_settings()
-        build_disabled = not valid_file or not key_ready or not name_ready or duplicate_collection or not embedding_ready or bool(settings_errors)
+        build_disabled = not valid_file or (requires_openai_key and not key_ready) or not name_ready or duplicate_collection or not embedding_ready or bool(settings_errors)
 
         _render_workflow_state(valid_file, not build_disabled)
 

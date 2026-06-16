@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_user, require_admin, require_api_key
 from app.core.config import get_settings
 from app.core.constants import DEFAULT_COLLECTION, DEFAULT_EMBEDDING_PROVIDER
-from app.core.rag_mode import RAG_RUNTIME_DISABLED_MESSAGE, require_rag_runtime
+from app.core.rag_mode import RAG_RUNTIME_DISABLED_MESSAGE, require_rag_runtime, require_render_free_openai
 from app.core.runtime_credentials import RuntimeCredentials
 from app.db.database import get_db
 from app.models.user import User
@@ -225,17 +225,18 @@ def select_collection(
             stored_provider = _normalize_embedding_provider(user_collection.embedding_provider)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if requested_provider != "openai" or stored_provider != "openai":
+        if requested_provider != stored_provider:
             raise HTTPException(status_code=503, detail=RAG_RUNTIME_DISABLED_MESSAGE)
+        require_render_free_openai(openai_api_key, stored_provider)
 
         session_id = uuid.uuid4().hex
-        embedding_model = user_collection.embedding_model or embedding_model_for_provider("openai")
-        vector_size = user_collection.vector_size or embedding_vector_size_for_provider("openai", embedding_model)
+        embedding_model = user_collection.embedding_model or embedding_model_for_provider(stored_provider)
+        vector_size = user_collection.vector_size or embedding_vector_size_for_provider(stored_provider, embedding_model)
         user_collection = update_user_collection_session(
             db,
             user_collection_id=user_collection.id,
             session_id=session_id,
-            embedding_provider="openai",
+            embedding_provider=stored_provider,
             embedding_model=embedding_model,
             vector_size=vector_size,
         )
@@ -245,7 +246,7 @@ def select_collection(
             "collection_name": user_collection.collection_name,
             "display_name": user_collection.display_name or user_collection.collection_name,
             "filename": user_collection.filename or "existing_qdrant_collection",
-            "embedding_provider": "openai",
+            "embedding_provider": stored_provider,
             "embedding_model": user_collection.embedding_model or embedding_model,
             "vector_size": user_collection.vector_size or vector_size,
             "selected_at": datetime.now(timezone.utc).isoformat(),

@@ -148,6 +148,12 @@ def _runtime_credentials(
     qdrant_api_key: str = "",
 ) -> RuntimeCredentials:
     if get_settings().render_free_mvp:
+        if not (openai_api_key or "").strip():
+            return RuntimeCredentials.from_values(
+                tavily_api_key=tavily_api_key,
+                qdrant_url=qdrant_url,
+                qdrant_api_key=qdrant_api_key,
+            )
         return RuntimeCredentials.from_values(
             openai_api_key=openai_api_key,
             use_openai=True,
@@ -240,7 +246,10 @@ def chat(
             collection_found,
             embedding_provider or "<missing>",
         )
-        if (openai_api_key or "").strip() and embedding_provider.lower() != "openai":
+        if (
+            (openai_api_key or "").strip()
+            and embedding_provider.lower() not in {"openai", "cloudflare"}
+        ):
             disabled_branch = (
                 "user_collection_not_found"
                 if not collection_found
@@ -268,7 +277,11 @@ def chat(
     )
     _require_session_access(db, current_user, request.session_id)
     _require_collection_access(db, current_user, request.collection_name)
-    if get_settings().render_free_mvp and collection is not None:
+    if (
+        get_settings().render_free_mvp
+        and collection is not None
+        and (collection.embedding_provider or "").strip().lower() == "openai"
+    ):
         credentials = _runtime_credentials(request, openai_api_key)
         _log_llm_selection(credentials)
         result = _render_free_result(request, openai_api_key, collection)
@@ -298,7 +311,8 @@ def chat(
     from app.services.rag_runtime import ask_session
     from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
 
-    credentials = _runtime_credentials(request, openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
+    runtime_openai_key = "" if get_settings().render_free_mvp and collection is not None else openai_api_key
+    credentials = _runtime_credentials(request, runtime_openai_key, tavily_api_key, qdrant_url, qdrant_api_key)
     _ensure_collection_runtime_session(request, credentials, collection)
     _log_collection_context(request)
     _log_llm_selection(credentials)
@@ -406,7 +420,11 @@ def chat_stream(
 
     _require_session_access(db, current_user, request.session_id)
     _require_collection_access(db, current_user, request.collection_name)
-    if get_settings().render_free_mvp and collection is not None:
+    if (
+        get_settings().render_free_mvp
+        and collection is not None
+        and (collection.embedding_provider or "").strip().lower() == "openai"
+    ):
         credentials = _runtime_credentials(request, openai_api_key)
         _log_llm_selection(credentials)
         result = _render_free_result(request, openai_api_key, collection)
@@ -415,7 +433,8 @@ def chat_stream(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
-    credentials = _runtime_credentials(request, openai_api_key, tavily_api_key, qdrant_url, qdrant_api_key)
+    runtime_openai_key = "" if get_settings().render_free_mvp and collection is not None else openai_api_key
+    credentials = _runtime_credentials(request, runtime_openai_key, tavily_api_key, qdrant_url, qdrant_api_key)
     _ensure_collection_runtime_session(request, credentials, collection)
     _log_collection_context(request)
     _log_llm_selection(credentials)
