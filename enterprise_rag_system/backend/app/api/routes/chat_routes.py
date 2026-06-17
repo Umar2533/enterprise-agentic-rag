@@ -227,28 +227,26 @@ def chat(
     db: Session = Depends(get_db),
 ):
     collection = _chat_collection(db, current_user, request)
+    stored_provider = (collection.embedding_provider or "").strip().lower() if collection is not None else ""
     if get_settings().render_free_mvp:
         collection_found = collection is not None
-        embedding_provider = (
-            (collection.embedding_provider or "").strip()
-            if collection_found
-            else ""
-        )
         logger.warning(
             "Render Free chat debug collection_name=%s session_id=%s "
             "user_id=%s user_email=%s user_role=%s "
-            "user_collection_found=%s embedding_provider=%s",
+            "user_collection_found=%s requested_provider=%s stored_provider=%s effective_branch=%s",
             request.collection_name or "",
             request.session_id,
             current_user.id,
             current_user.email,
             current_user.role,
             collection_found,
-            embedding_provider or "<missing>",
+            "<not_in_chat_request>",
+            stored_provider or "<missing>",
+            "openai_byok" if stored_provider == "openai" else "metadata_runtime",
         )
         if (
             (openai_api_key or "").strip()
-            and embedding_provider.lower() not in {"openai", "cloudflare"}
+            and stored_provider not in {"openai", "cloudflare"}
         ):
             disabled_branch = (
                 "user_collection_not_found"
@@ -265,7 +263,7 @@ def chat(
             )
     require_render_free_openai(
         openai_api_key,
-        (collection.embedding_provider or "") if collection is not None else "",
+        stored_provider,
     )
     logger.info(
         "Chat request payload session_id=%s collection=%s question_length=%s answer_length=%s allow_web_search=%s",
@@ -280,7 +278,8 @@ def chat(
     if (
         get_settings().render_free_mvp
         and collection is not None
-        and (collection.embedding_provider or "").strip().lower() == "openai"
+        and stored_provider == "openai"
+        and (openai_api_key or "").strip()
     ):
         credentials = _runtime_credentials(request, openai_api_key)
         _log_llm_selection(credentials)
@@ -311,7 +310,7 @@ def chat(
     from app.services.rag_runtime import ask_session
     from app.services.vectordb.qdrant_service import qdrant_runtime_credentials
 
-    runtime_openai_key = "" if get_settings().render_free_mvp and collection is not None else openai_api_key
+    runtime_openai_key = "" if get_settings().render_free_mvp and stored_provider != "openai" else openai_api_key
     credentials = _runtime_credentials(request, runtime_openai_key, tavily_api_key, qdrant_url, qdrant_api_key)
     _ensure_collection_runtime_session(request, credentials, collection)
     _log_collection_context(request)
@@ -413,9 +412,10 @@ def chat_stream(
     db: Session = Depends(get_db),
 ):
     collection = _chat_collection(db, current_user, request)
+    stored_provider = (collection.embedding_provider or "").strip().lower() if collection is not None else ""
     require_render_free_openai(
         openai_api_key,
-        (collection.embedding_provider or "") if collection is not None else "",
+        stored_provider,
     )
 
     _require_session_access(db, current_user, request.session_id)
@@ -423,7 +423,8 @@ def chat_stream(
     if (
         get_settings().render_free_mvp
         and collection is not None
-        and (collection.embedding_provider or "").strip().lower() == "openai"
+        and stored_provider == "openai"
+        and (openai_api_key or "").strip()
     ):
         credentials = _runtime_credentials(request, openai_api_key)
         _log_llm_selection(credentials)
@@ -433,7 +434,7 @@ def chat_stream(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
-    runtime_openai_key = "" if get_settings().render_free_mvp and collection is not None else openai_api_key
+    runtime_openai_key = "" if get_settings().render_free_mvp and stored_provider != "openai" else openai_api_key
     credentials = _runtime_credentials(request, runtime_openai_key, tavily_api_key, qdrant_url, qdrant_api_key)
     _ensure_collection_runtime_session(request, credentials, collection)
     _log_collection_context(request)
