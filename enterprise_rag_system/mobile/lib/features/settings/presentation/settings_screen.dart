@@ -101,8 +101,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) {
       setState(() {
         _credentialMessage = widget.session.hasActiveOpenAiKey
-            ? 'OpenAI Runtime Key Active'
-            : 'OpenAI Runtime Key Missing';
+            ? 'Optional OpenAI Runtime Key Active'
+            : 'OpenAI Runtime Key Optional';
       });
     }
   }
@@ -321,8 +321,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         setState(() {
           _checking = false;
           _healthMessage =
-              '${health.app} online. Vector DB: ${health.vectorDbProvider}. Embedding: ${health.embeddingProvider}.';
+              '${health.app} online. Vector DB: ${health.vectorDbProvider}. Embedding: ${ApiConstants.embeddingProviderLabel(health.embeddingProvider)}.';
         });
+        if (ApiConstants.supportedEmbeddingProviders.contains(
+          health.embeddingProvider,
+        )) {
+          await widget.session.setEmbeddingProvider(health.embeddingProvider);
+        }
       }
     } catch (error) {
       if (mounted) {
@@ -983,7 +988,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             fontWeight: FontWeight.w900,
           ),
         ),
-        subtitle: const Text('Manual auth and OpenAI runtime keys'),
+        subtitle: const Text('Manual auth and optional runtime keys'),
         children: [
           Align(
             alignment: Alignment.centerLeft,
@@ -1022,7 +1027,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextField(
             controller: _openAiApiKeyController,
             decoration: const InputDecoration(
-              labelText: 'OpenAI API Key (required for Upload + Chat)',
+              labelText: 'OpenAI API Key (optional BYOK)',
               prefixIcon: Icon(Icons.auto_awesome_rounded),
             ),
             obscureText: true,
@@ -1035,8 +1040,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             alignment: Alignment.centerLeft,
             child: StatusBadge(
               label: widget.session.hasActiveOpenAiKey
-                  ? 'OpenAI Runtime Key Active'
-                  : 'OpenAI Runtime Key Missing',
+                  ? 'Optional OpenAI Runtime Key Active'
+                  : 'OpenAI Runtime Key Optional',
               color: widget.session.hasActiveOpenAiKey
                   ? const Color(0xFF15803D)
                   : const Color(0xFFB45309),
@@ -1196,7 +1201,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       .map(
                         (provider) => DropdownMenuItem(
                           value: provider,
-                          child: Text(provider),
+                          child: Text(
+                            ApiConstants.embeddingProviderLabel(provider),
+                          ),
                         ),
                       )
                       .toList(),

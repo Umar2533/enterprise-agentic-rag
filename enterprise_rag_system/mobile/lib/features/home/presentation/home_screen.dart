@@ -320,9 +320,9 @@ class _StatsRow extends StatelessWidget {
       children: [
         Expanded(
           child: _StatCard(
-            value: openAiActive ? 'Active' : 'Missing',
-            label: 'OPENAI',
-            color: openAiActive ? _HomePalette.cyan : _HomePalette.amber,
+            value: openAiActive ? 'Active' : 'Optional',
+            label: 'BYOK',
+            color: openAiActive ? _HomePalette.cyan : _HomePalette.muted,
           ),
         ),
         const SizedBox(width: 8),

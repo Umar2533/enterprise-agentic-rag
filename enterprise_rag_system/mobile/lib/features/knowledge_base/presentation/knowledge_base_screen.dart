@@ -309,7 +309,9 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
                     .map(
                       (provider) => DropdownMenuItem(
                         value: provider,
-                        child: Text(provider),
+                        child: Text(
+                          ApiConstants.embeddingProviderLabel(provider),
+                        ),
                       ),
                     )
                     .toList(),

@@ -242,7 +242,9 @@ class _UploadScreenState extends State<UploadScreen> {
                       .map(
                         (provider) => DropdownMenuItem(
                           value: provider,
-                          child: Text(provider),
+                          child: Text(
+                            ApiConstants.embeddingProviderLabel(provider),
+                          ),
                         ),
                       )
                       .toList(),

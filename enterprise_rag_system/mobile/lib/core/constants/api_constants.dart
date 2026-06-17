@@ -113,4 +113,19 @@ class ApiConstants {
     'sentence-transformers',
     'sentence_transformers',
   ];
+
+  static String embeddingProviderLabel(String provider) {
+    switch (provider.trim().toLowerCase()) {
+      case 'cloudflare':
+        return 'Cloudflare Workers AI';
+      case 'openai':
+        return 'OpenAI';
+      case 'huggingface':
+      case 'sentence-transformers':
+      case 'sentence_transformers':
+        return 'HuggingFace Local';
+      default:
+        return provider;
+    }
+  }
 }
