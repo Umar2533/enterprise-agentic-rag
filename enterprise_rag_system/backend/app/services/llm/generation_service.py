@@ -36,7 +36,14 @@ def _chat_messages(prompt_value) -> list[dict[str, str]]:
 
 
 class OpenAIChatModelLite:
-    def __init__(self, api_key: str, model: str, streaming: bool, base_url: str | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        streaming: bool,
+        base_url: str | None = None,
+        provider: str = "openai",
+    ):
         from openai import OpenAI
 
         kwargs = {"api_key": api_key}
@@ -46,8 +53,10 @@ class OpenAIChatModelLite:
         self._model = model
         self._streaming = streaming
         self._base_url = base_url or ""
+        self._provider = provider
 
     def invoke(self, prompt: str):
+        self._log_and_validate_client()
         response = self._client.chat.completions.create(
             model=self._model,
             messages=_chat_messages(prompt),
@@ -56,6 +65,7 @@ class OpenAIChatModelLite:
         return SimpleNamespace(content=response.choices[0].message.content or "")
 
     def stream(self, prompt: str):
+        self._log_and_validate_client()
         response = self._client.chat.completions.create(
             model=self._model,
             messages=_chat_messages(prompt),
@@ -64,6 +74,17 @@ class OpenAIChatModelLite:
         )
         for chunk in response:
             yield SimpleNamespace(content=chunk.choices[0].delta.content or "")
+
+    def _log_and_validate_client(self) -> None:
+        base_url_host = _base_url_host(self._base_url)
+        logger.info(
+            "LLM API call provider=%s model=%s base_url_host=%s",
+            self._provider,
+            self._model,
+            base_url_host,
+        )
+        if self._provider == "groq" and base_url_host != "api.groq.com":
+            raise RuntimeError("Groq provider selected but client base_url is not Groq")
 
 
 def _base_url_host(base_url: str | None) -> str:
@@ -209,12 +230,14 @@ def get_chat_model(streaming: bool = True, credentials: RuntimeCredentials | Non
             model=model,
             streaming=streaming,
             base_url=base_url,
+            provider="groq",
         )
     if settings.render_free_mvp:
         return OpenAIChatModelLite(
             api_key=credentials.require_openai_api_key(),
             model=CHAT_MODEL,
             streaming=streaming,
+            provider="openai",
         )
     from langchain_openai import ChatOpenAI
 
