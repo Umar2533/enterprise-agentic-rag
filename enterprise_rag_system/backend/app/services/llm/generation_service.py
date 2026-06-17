@@ -2,6 +2,7 @@ import re
 import logging
 from collections import Counter
 from types import SimpleNamespace
+from urllib.parse import urlparse
 
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
@@ -13,6 +14,7 @@ from app.core.runtime_credentials import RuntimeCredentials
 
 
 logger = logging.getLogger(__name__)
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 
 def _chat_messages(prompt_value) -> list[dict[str, str]]:
@@ -43,6 +45,7 @@ class OpenAIChatModelLite:
         self._client = OpenAI(**kwargs)
         self._model = model
         self._streaming = streaming
+        self._base_url = base_url or ""
 
     def invoke(self, prompt: str):
         response = self._client.chat.completions.create(
@@ -61,6 +64,31 @@ class OpenAIChatModelLite:
         )
         for chunk in response:
             yield SimpleNamespace(content=chunk.choices[0].delta.content or "")
+
+
+def _base_url_host(base_url: str | None) -> str:
+    if not base_url:
+        return "default_openai"
+    return urlparse(base_url).hostname or "default_openai"
+
+
+def _settings_llm_provider(settings) -> str:
+    provider = (
+        str(getattr(settings, "effective_llm_provider", "") or settings.llm_provider or "auto")
+        .strip()
+        .lower()
+    )
+    if provider == "auto":
+        if (settings.openai_api_key or "").strip():
+            return "openai"
+        if (settings.groq_api_key or "").strip():
+            return "groq"
+        return "local_stub"
+    if provider == "groq" and not (settings.groq_api_key or "").strip():
+        return "local_stub"
+    if provider == "openai" and not (settings.openai_api_key or "").strip():
+        return "openai"
+    return provider
 
 
 _STOP_WORDS = {
@@ -158,16 +186,17 @@ def _local_stub_response(prompt_value) -> AIMessage:
 def get_chat_model(streaming: bool = True, credentials: RuntimeCredentials | None = None):
     credentials = credentials or RuntimeCredentials()
     settings = get_settings()
-    provider = credentials.llm_provider
-    if (settings.llm_provider or "").strip().lower() == "groq" and (settings.groq_api_key or "").strip():
-        provider = "groq"
+    provider = _settings_llm_provider(settings)
+    model = settings.groq_model if provider == "groq" else CHAT_MODEL
+    base_url = GROQ_BASE_URL if provider == "groq" else None
     logger.info(
-        "LLM model selection runtime_key_present=%s env_key_present=%s groq_key_present=%s selected_llm_provider=%s selected_model=%s fallback_used=%s",
+        "LLM model selection runtime_key_present=%s env_key_present=%s groq_key_present=%s provider=%s model=%s base_url_host=%s fallback_used=%s",
         bool(credentials.openai_api_key),
         credentials.env_openai_api_key_present,
         credentials.env_groq_api_key_present,
         provider,
-        credentials.llm_model,
+        model if provider != "local_stub" else "deterministic context summarizer",
+        _base_url_host(base_url),
         provider == "local_stub",
     )
     if provider == "local_stub":
@@ -176,10 +205,10 @@ def get_chat_model(streaming: bool = True, credentials: RuntimeCredentials | Non
         return RunnableLambda(_local_stub_response)
     if provider == "groq":
         return OpenAIChatModelLite(
-            api_key=credentials.effective_groq_api_key,
-            model=settings.groq_model,
+            api_key=(settings.groq_api_key or "").strip(),
+            model=model,
             streaming=streaming,
-            base_url="https://api.groq.com/openai/v1",
+            base_url=base_url,
         )
     if settings.render_free_mvp:
         return OpenAIChatModelLite(
