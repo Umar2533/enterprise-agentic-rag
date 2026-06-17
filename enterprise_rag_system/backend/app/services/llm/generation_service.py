@@ -54,6 +54,7 @@ class OpenAIChatModelLite:
         self._streaming = streaming
         self._base_url = base_url or ""
         self._provider = provider
+        self._log_client("constructed")
 
     def invoke(self, prompt: str):
         self._log_and_validate_client()
@@ -76,15 +77,20 @@ class OpenAIChatModelLite:
             yield SimpleNamespace(content=chunk.choices[0].delta.content or "")
 
     def _log_and_validate_client(self) -> None:
+        self._log_client("before_call")
+        if self._provider == "groq" and _base_url_host(self._base_url) != "api.groq.com":
+            raise RuntimeError("Groq provider selected but client base_url is not Groq")
+
+    def _log_client(self, event: str) -> None:
         base_url_host = _base_url_host(self._base_url)
-        logger.info(
-            "LLM API call provider=%s model=%s base_url_host=%s",
+        logger.warning(
+            "LLM client %s class=%s provider=%s model=%s base_url_host=%s",
+            event,
+            self.__class__.__name__,
             self._provider,
             self._model,
             base_url_host,
         )
-        if self._provider == "groq" and base_url_host != "api.groq.com":
-            raise RuntimeError("Groq provider selected but client base_url is not Groq")
 
 
 def _base_url_host(base_url: str | None) -> str:
@@ -210,7 +216,7 @@ def get_chat_model(streaming: bool = True, credentials: RuntimeCredentials | Non
     provider = _settings_llm_provider(settings)
     model = settings.groq_model if provider == "groq" else CHAT_MODEL
     base_url = GROQ_BASE_URL if provider == "groq" else None
-    logger.info(
+    logger.warning(
         "LLM model selection runtime_key_present=%s env_key_present=%s groq_key_present=%s provider=%s model=%s base_url_host=%s fallback_used=%s",
         bool(credentials.openai_api_key),
         credentials.env_openai_api_key_present,
