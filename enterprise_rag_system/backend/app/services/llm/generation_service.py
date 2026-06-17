@@ -157,7 +157,10 @@ def _local_stub_response(prompt_value) -> AIMessage:
 
 def get_chat_model(streaming: bool = True, credentials: RuntimeCredentials | None = None):
     credentials = credentials or RuntimeCredentials()
+    settings = get_settings()
     provider = credentials.llm_provider
+    if (settings.llm_provider or "").strip().lower() == "groq" and (settings.groq_api_key or "").strip():
+        provider = "groq"
     logger.info(
         "LLM model selection runtime_key_present=%s env_key_present=%s groq_key_present=%s selected_llm_provider=%s selected_model=%s fallback_used=%s",
         bool(credentials.openai_api_key),
@@ -173,12 +176,12 @@ def get_chat_model(streaming: bool = True, credentials: RuntimeCredentials | Non
         return RunnableLambda(_local_stub_response)
     if provider == "groq":
         return OpenAIChatModelLite(
-            api_key=credentials.require_groq_api_key(),
-            model=credentials.llm_model,
+            api_key=credentials.effective_groq_api_key,
+            model=settings.groq_model,
             streaming=streaming,
             base_url="https://api.groq.com/openai/v1",
         )
-    if get_settings().render_free_mvp:
+    if settings.render_free_mvp:
         return OpenAIChatModelLite(
             api_key=credentials.require_openai_api_key(),
             model=CHAT_MODEL,
